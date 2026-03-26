@@ -1,0 +1,190 @@
+<div class="mixer-layout">
+
+  <aside class="sidebar">
+
+    <div class="sidebar-header">
+      <svg viewBox="0 0 14 14" fill="none">
+        <rect x="1" y="4" width="3" height="6" rx="1" fill="currentColor" opacity="0.7"/>
+        <rect x="5.5" y="2" width="3" height="10" rx="1" fill="currentColor"/>
+        <rect x="10" y="5" width="3" height="5" rx="1" fill="currentColor" opacity="0.7"/>
+      </svg>
+      MIXER CONTROLS
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Image Size Policy</div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Unify To</label>
+        <select class="styled-select">
+          <option>Smallest</option><option>Largest</option><option>Fixed Size</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Aspect Ratio</label>
+        <div class="toggle-row">
+          <button class="toggle-btn active">Keep</button>
+          <button class="toggle-btn">Ignore</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Output Target</div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Send Result To</label>
+        <div class="toggle-row">
+          <button class="toggle-btn active">Output 1</button>
+          <button class="toggle-btn">Output 2</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Mixing Mode</div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Component Pair</label>
+        <div class="toggle-row">
+          <button class="toggle-btn active">Mag / Phase</button>
+          <button class="toggle-btn">Real / Imag</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Component Weights</div>
+      @for (img of images; track $index; let i = $index) {
+        <div class="weight-block">
+          <div class="weight-header">
+            <span class="weight-title">
+              <span class="img-dot" [style.background]="img.color"></span>
+              Image {{ i + 1 }}
+            </span>
+            <span class="weight-val">{{ img.magWeight | number:'1.2-2' }}</span>
+          </div>
+          <div class="dual-slider-row">
+            <span class="sub-label">Mag</span>
+            <input type="range" class="styled-slider" min="0" max="1" step="0.01" [(ngModel)]="img.magWeight">
+            <span class="sub-label">Pha</span>
+            <input type="range" class="styled-slider" min="0" max="1" step="0.01" [(ngModel)]="img.phaseWeight">
+          </div>
+        </div>
+      }
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Frequency Region</div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Region Type</label>
+        <div class="toggle-row">
+          <button class="toggle-btn active">Inner (Low)</button>
+          <button class="toggle-btn">Outer (High)</button>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Region Size <span class="val">{{ regionSize }}%</span></label>
+        <input type="range" class="styled-slider" min="5" max="95" step="1" [(ngModel)]="regionSize">
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      @if (isMixing) {
+        <div class="progress-area">
+          <div class="progress-lbl">
+            <span>Mixing…</span>
+            <span class="mono">{{ mixProgress }}%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" [style.width.%]="mixProgress"></div>
+          </div>
+        </div>
+      }
+      
+      <button class="mix-btn" (click)="startMix()" [disabled]="isMixing">
+        <svg viewBox="0 0 14 14" fill="none">
+          <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        {{ isMixing ? 'Running…' : 'Run Mix' }}
+      </button>
+
+      @if (isMixing) {
+        <button class="cancel-btn" (click)="cancelMix()">Cancel</button>
+      }
+    </div>
+
+  </aside>
+
+  <div class="viewport-area">
+
+    <div class="vp-row">
+      <div class="row-label">
+        <span class="row-dot blue"></span>INPUT IMAGES
+      </div>
+      <div class="vp-grid">
+        @for (img of images; track $index; let i = $index) {
+          <div class="vp-card">
+            <div class="vp-header">
+              <span class="vp-title">Image {{ i + 1 }}</span>
+              <select class="mini-select" [(ngModel)]="img.displayMode">
+                <option value="image">Image</option>
+                <option value="magnitude">FT Magnitude</option>
+                <option value="phase">FT Phase</option>
+                <option value="real">FT Real</option>
+                <option value="imaginary">FT Imaginary</option>
+              </select>
+            </div>
+            <div class="vp-canvas" (dblclick)="browseImage(i)" (mousedown)="startBrightnessAdjust($event, i)">
+              @if (!img.loaded) {
+                <div class="vp-empty">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 2"/>
+                    <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                  <span>Double-click to open image</span>
+                </div>
+              } @else {
+                <img [src]="img.displaySrc" class="vp-img"
+                     [style.filter]="'brightness('+img.brightness+') contrast('+img.contrast+')'">
+              }
+            </div>
+            <div class="vp-foot">
+              <span class="vp-foot-label">{{ img.displayMode | uppercase }}</span>
+              <span class="vp-foot-hint">↑↓ brightness · ←→ contrast</span>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="vp-row">
+      <div class="row-label">
+        <span class="row-dot green"></span>OUTPUT RESULTS
+      </div>
+      <div class="vp-grid two-col">
+        @for (out of outputs; track $index; let i = $index) {
+          <div class="vp-card output">
+            <div class="vp-header">
+              <span class="vp-title">Output {{ i + 1 }}</span>
+              @if (out.active) {
+                <span class="output-badge">ACTIVE</span>
+              }
+            </div>
+            <div class="vp-canvas">
+              @if (!out.hasResult) {
+                <div class="vp-empty">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>
+                    <path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                  <span>Awaiting mix result</span>
+                </div>
+              } @else {
+                <img [src]="out.resultSrc" class="vp-img">
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+  </div>
+</div>

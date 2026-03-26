@@ -1,1 +1,44 @@
-/* You can add global styles to this file, and also import other style files */
+/* src/styles.css (the global file in angular.json) */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;700&display=swap');
+
+:root {
+  --bg-app:        #f0f4f8;
+  --bg-surface:    #ffffff;
+  --bg-input-hd:   #f0f7ff;
+  --bg-output-hd:  #f0fff4;
+  --bg-hover:      #f0f7ff;
+  --bg-active:     #e8f0fe;
+  --border:        #d8e2ee;
+  --border-focus:  #1a73e8;
+  --border-light:  #e8edf3;
+  --text-primary:  #1a2b4a;
+  --text-secondary:#4a6a8a;
+  --text-muted:    #7a8fa6;
+  --text-label:    #94a3b8;
+  --accent-blue:   #1a73e8;
+  --accent-blue-bg:#e8f0fe;
+  --accent-green:  #34a853;
+  --accent-green-bg:#f0fff4;
+  --accent-yellow: #e8a82b;
+  --accent-red:    #dc2626;
+  --shadow-sm:     0 1px 3px rgba(0,0,0,0.05);
+  --shadow-md:     0 1px 4px rgba(0,0,0,0.08);
+  --radius-sm:     6px;
+  --radius-md:     10px;
+  --radius-lg:     14px;
+  --topbar-h:      52px;
+  --font-ui:       'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-mono:     'IBM Plex Mono', 'Fira Code', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}

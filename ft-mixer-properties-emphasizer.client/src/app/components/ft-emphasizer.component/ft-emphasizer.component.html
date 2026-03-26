@@ -1,0 +1,297 @@
+<div class="emphasizer-layout">
+
+  <aside class="sidebar">
+
+    <div class="sidebar-header">
+      <svg viewBox="0 0 14 14" fill="none">
+        <circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.4"/>
+        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1" opacity="0.45"/>
+      </svg>
+      FT PROPERTIES
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Action</div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Operation</label>
+        <select class="styled-select" [(ngModel)]="selectedAction" (ngModelChange)="onActionChange()">
+          <optgroup label="Spatial Transform">
+            <option value="shift">Shift</option>
+            <option value="stretch">Stretch</option>
+            <option value="mirror">Mirror</option>
+            <option value="rotate">Rotate</option>
+          </optgroup>
+          <optgroup label="Symmetry">
+            <option value="even">Make Even</option>
+            <option value="odd">Make Odd</option>
+          </optgroup>
+          <optgroup label="Frequency Domain">
+            <option value="complex_exp">Multiply by Complex Exp</option>
+            <option value="window">Apply Window</option>
+          </optgroup>
+          <optgroup label="Calculus">
+            <option value="differentiate">Differentiate</option>
+            <option value="integrate">Integrate</option>
+          </optgroup>
+          <optgroup label="Fourier">
+            <option value="ft_repeat">Repeated Fourier</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Apply On</label>
+        <div class="toggle-row">
+          <button class="toggle-btn" [class.active]="domain==='spatial'"   (click)="domain='spatial'">Spatial</button>
+          <button class="toggle-btn" [class.active]="domain==='frequency'" (click)="domain='frequency'">Frequency</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Parameters</div>
+
+      @if (selectedAction === 'shift') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Shift X <span class="val">{{ params.shiftX }}px</span></label>
+          <input type="range" class="styled-slider" min="-200" max="200" [(ngModel)]="params.shiftX">
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Shift Y <span class="val">{{ params.shiftY }}px</span></label>
+          <input type="range" class="styled-slider" min="-200" max="200" [(ngModel)]="params.shiftY">
+        </div>
+      }
+
+      @if (selectedAction === 'stretch') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Scale X <span class="val">{{ params.scaleX | number:'1.2-2' }}×</span></label>
+          <input type="range" class="styled-slider" min="0.1" max="5" step="0.05" [(ngModel)]="params.scaleX">
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Scale Y <span class="val">{{ params.scaleY | number:'1.2-2' }}×</span></label>
+          <input type="range" class="styled-slider" min="0.1" max="5" step="0.05" [(ngModel)]="params.scaleY">
+        </div>
+      }
+
+      @if (selectedAction === 'rotate') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Angle <span class="val">{{ params.angle }}°</span></label>
+          <input type="range" class="styled-slider" min="0" max="360" [(ngModel)]="params.angle">
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Expand Canvas</label>
+          <div class="toggle-row">
+            <button class="toggle-btn" [class.active]="params.expandCanvas"  (click)="params.expandCanvas=true">Yes</button>
+            <button class="toggle-btn" [class.active]="!params.expandCanvas" (click)="params.expandCanvas=false">No</button>
+          </div>
+        </div>
+      }
+
+      @if (selectedAction === 'mirror') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Axis</label>
+          <div class="toggle-row">
+            <button class="toggle-btn" [class.active]="params.mirrorAxis==='horizontal'" (click)="params.mirrorAxis='horizontal'">H</button>
+            <button class="toggle-btn" [class.active]="params.mirrorAxis==='vertical'"   (click)="params.mirrorAxis='vertical'">V</button>
+            <button class="toggle-btn" [class.active]="params.mirrorAxis==='both'"       (click)="params.mirrorAxis='both'">Both</button>
+          </div>
+        </div>
+      }
+
+      @if (selectedAction === 'complex_exp') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Freq u₀ <span class="val">{{ params.freqU }}</span></label>
+          <input type="range" class="styled-slider" min="-100" max="100" [(ngModel)]="params.freqU">
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Freq v₀ <span class="val">{{ params.freqV }}</span></label>
+          <input type="range" class="styled-slider" min="-100" max="100" [(ngModel)]="params.freqV">
+        </div>
+      }
+
+      @if (selectedAction === 'window') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Window Type</label>
+          <select class="styled-select" [(ngModel)]="params.windowType">
+            <option value="rectangular">Rectangular</option>
+            <option value="gaussian">Gaussian</option>
+            <option value="hamming">Hamming</option>
+            <option value="hanning">Hanning</option>
+          </select>
+        </div>
+        @if (params.windowType === 'gaussian') {
+          <div class="ctrl-group">
+            <label class="ctrl-label">σ Sigma <span class="val">{{ params.sigma }}</span></label>
+            <input type="range" class="styled-slider" min="1" max="200" [(ngModel)]="params.sigma">
+          </div>
+        }
+        <div class="ctrl-group">
+          <label class="ctrl-label">Width <span class="val">{{ params.windowW }}px</span></label>
+          <input type="range" class="styled-slider" min="10" max="500" [(ngModel)]="params.windowW">
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Height <span class="val">{{ params.windowH }}px</span></label>
+          <input type="range" class="styled-slider" min="10" max="500" [(ngModel)]="params.windowH">
+        </div>
+      }
+
+      @if (selectedAction === 'ft_repeat') {
+        <div class="ctrl-group">
+          <label class="ctrl-label">Repeat Count <span class="val">{{ params.ftRepeat }}×</span></label>
+          <input type="range" class="styled-slider" min="1" max="8" step="1" [(ngModel)]="params.ftRepeat">
+        </div>
+      }
+
+      @if (['even','odd','differentiate','integrate'].includes(selectedAction)) {
+        <div class="no-params-hint">
+          <svg viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M8 7v4M8 5v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          No extra parameters for this action.
+        </div>
+      }
+    </div>
+
+    <div class="ctrl-section">
+      <div class="section-label">Chain Fourier</div>
+      <div class="ctrl-group">
+        <label class="ctrl-label">Extra FT Passes <span class="val">{{ params.chainFT }}×</span></label>
+        <input type="range" class="styled-slider" min="0" max="6" step="1" [(ngModel)]="params.chainFT">
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="apply-btn" (click)="applyAction()" [disabled]="!originalLoaded">
+        <svg viewBox="0 0 14 14" fill="none">
+          <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Apply
+      </button>
+    </div>
+
+  </aside>
+
+  <div class="viewport-area">
+
+    <div class="domain-panel">
+      <div class="domain-header">
+        <span class="domain-dot blue"></span>
+        <span class="domain-title">SPATIAL DOMAIN</span>
+      </div>
+      <div class="domain-viewports">
+
+        <div class="vp-card">
+          <div class="vp-header">
+            <span class="vp-title">Original</span>
+            <select class="mini-select" [(ngModel)]="spatialOrigMode">
+              <option value="image">Image</option>
+              <option value="magnitude">Magnitude</option>
+              <option value="phase">Phase</option>
+              <option value="real">Real</option>
+              <option value="imaginary">Imaginary</option>
+            </select>
+          </div>
+          <div class="vp-canvas" (dblclick)="browseImage()">
+            @if (!originalLoaded) {
+              <div class="vp-empty">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 2"/>
+                  <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span>Double-click to load image</span>
+              </div>
+            } @else {
+              <img [src]="originalSrc" class="vp-img">
+            }
+          </div>
+        </div>
+
+        <div class="vp-card">
+          <div class="vp-header result-header">
+            <span class="vp-title">After Action</span>
+            <select class="mini-select" [(ngModel)]="spatialResultMode">
+              <option value="image">Image</option>
+              <option value="magnitude">Magnitude</option>
+              <option value="phase">Phase</option>
+              <option value="real">Real</option>
+              <option value="imaginary">Imaginary</option>
+            </select>
+          </div>
+          <div class="vp-canvas result-canvas" [class.has-result]="resultReady">
+            @if (!resultReady) {
+              <div class="vp-empty">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>
+                  <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Result appears here</span>
+              </div>
+            } @else {
+              <img [src]="resultSrc" class="vp-img">
+            }
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="domain-panel">
+      <div class="domain-header">
+        <span class="domain-dot yellow"></span>
+        <span class="domain-title">FREQUENCY DOMAIN</span>
+      </div>
+      <div class="domain-viewports">
+
+        <div class="vp-card">
+          <div class="vp-header ft-header">
+            <span class="vp-title">FT of Original</span>
+            <select class="mini-select" [(ngModel)]="ftOrigMode">
+              <option value="magnitude">Magnitude</option>
+              <option value="phase">Phase</option>
+              <option value="real">Real</option>
+              <option value="imaginary">Imaginary</option>
+            </select>
+          </div>
+          <div class="vp-canvas ft-canvas">
+            @if (!originalLoaded) {
+              <div class="vp-empty">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M3 17l4-8 4 4 4-6 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Load an image to see its FT</span>
+              </div>
+            } @else {
+              <img [src]="ftOrigSrc" class="vp-img">
+            }
+          </div>
+        </div>
+
+        <div class="vp-card">
+          <div class="vp-header ft-header result-header">
+            <span class="vp-title">FT After Action</span>
+            <select class="mini-select" [(ngModel)]="ftResultMode">
+              <option value="magnitude">Magnitude</option>
+              <option value="phase">Phase</option>
+              <option value="real">Real</option>
+              <option value="imaginary">Imaginary</option>
+            </select>
+          </div>
+          <div class="vp-canvas ft-canvas result-canvas" [class.has-result]="resultReady">
+            @if (!resultReady) {
+              <div class="vp-empty">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M3 17l4-8 4 4 4-6 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Result FT appears here</span>
+              </div>
+            } @else {
+              <img [src]="ftResultSrc" class="vp-img">
+            }
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>

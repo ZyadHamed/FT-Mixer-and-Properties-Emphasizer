@@ -1,0 +1,73 @@
+<!-- app.component.html  (updated: CSS, white/blue theme) -->
+<div class="app-shell">
+
+  <!-- Top Navigation Bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 12C2 12 4 4 8 4C10 4 11 6 12 8C13 10 14 12 16 12C20 12 22 4 22 4" stroke="var(--accent-blue)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M2 18C2 18 4 10 8 10C10 10 11 12 12 14C13 16 14 18 16 18C20 18 22 10 22 10" stroke="var(--accent-green)" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+        </svg>
+        <span class="brand-name">FourierLab</span>
+      </div>
+    </div>
+
+    <div class="topbar-center">
+      <div class="mode-switcher">
+        <span class="mode-label">MODE</span>
+        <div class="mode-tabs">
+          <button
+            class="mode-tab"
+            [class.active]="activeMode === 'mixer'"
+            (click)="setMode('mixer')">
+            <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="5" width="4" height="6" rx="1" fill="currentColor" opacity="0.8"/>
+              <rect x="6" y="3" width="4" height="10" rx="1" fill="currentColor"/>
+              <rect x="11" y="6" width="4" height="5" rx="1" fill="currentColor" opacity="0.8"/>
+            </svg>
+            Magnitude / Phase Mixer
+          </button>
+          <button
+            class="mode-tab"
+            [class.active]="activeMode === 'emphasizer'"
+            (click)="setMode('emphasizer')">
+            <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/>
+              <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+              <line x1="8" y1="1" x2="8" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <line x1="8" y1="13" x2="8" y2="15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <line x1="1" y1="8" x2="3" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <line x1="13" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            FT Properties Emphasizer
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <div class="status-indicator">
+        <span class="status-dot"></span>
+        <span class="status-text">Ready</span>
+      </div>
+      <button class="icon-btn" title="Settings">
+        <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.22 4.22l1.42 1.42M14.36 14.36l1.42 1.42M4.22 15.78l1.42-1.42M14.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Mode Views -->
+  <main class="main-content">
+    @if(activeMode === 'mixer'){
+    <app-ft-mixer [@fadeSlide]></app-ft-mixer>
+    }
+    @if(activeMode === 'emphasizer'){
+    <app-ft-emphasizer [@fadeSlide]></app-ft-emphasizer>
+    }
+  </main>
+
+</div>
