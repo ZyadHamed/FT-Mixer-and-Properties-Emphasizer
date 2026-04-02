@@ -38,7 +38,8 @@ export class ImageViewportComponent implements OnChanges {
   @Input() viewportData: ImageViewportData | null = null;
   @Input() isActive: boolean = false;
   @Input() isAwaiting: boolean = false;
-
+  @Input() regionSize: number = 0; 
+  @Input() regionType: 'inner' | 'outer' = 'inner';
   @Output() imageSelected = new EventEmitter<File>();
   @Output() componentChanged = new EventEmitter<FtComponent>();
   @Output() brightnessContrastChanged = new EventEmitter<{ brightness: number; contrast: number }>();
@@ -91,7 +92,20 @@ export class ImageViewportComponent implements OnChanges {
   get hasImage(): boolean {
     return !!this.currentImageSrc;
   }
+  
+  getRegionStyle() {
+    const size = this.regionSize;
+    
+    const offset = (100 - size) / 2;
 
+    return {
+      'width': size + '%',
+      'height': size + '%',
+      'top': offset + '%',
+      'left': offset + '%',
+      'display': this.selectedComponent === 'image' ? 'none' : 'block'
+    };
+  }
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['viewportData'] && !this.viewportData) {
       this.selectedComponent = 'image';

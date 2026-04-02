@@ -46,6 +46,13 @@
       alt="viewport image"
     />
 
+    <div 
+      *ngIf="hasImage && !isAwaiting && selectedComponent !== 'image'" 
+      class="region-overlay"
+      [ngClass]="regionType === 'inner' ? 'mode-inner' : 'mode-outer'"
+      [ngStyle]="getRegionStyle()"
+    ></div>
+
     <!-- Awaiting spinner (output while mixing) -->
     <div *ngIf="isAwaiting" class="awaiting-state">
       <div class="spinner-ring"></div>

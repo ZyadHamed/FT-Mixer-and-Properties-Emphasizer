@@ -4,9 +4,9 @@
 .mixer-layout {
   display: flex;
   height: calc(100vh - 52px);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
-
 /* ══ SIDEBAR ════════════════════════════════════════════════════════ */
 .sidebar {
   width: 256px;
@@ -376,9 +376,10 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   padding: 12px;
   gap: 12px;
+  min-height: min-content;
 }
 
 /* ══ ROW ════════════════════════════════════════════════════════════ */
@@ -386,8 +387,8 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  flex: 1;
-  min-height: 0;
+  flex: none;
+  min-height: 350px; 
 }
 
 .row-label {
@@ -423,7 +424,7 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
   flex: 1;
-  min-height: 0;
+  min-height: 300px; 
 }
 
   .vp-grid.two-col {
@@ -495,12 +496,10 @@
   align-items: center;
   justify-content: center;
   background: #f8fafc;
-  overflow: hidden;
-  min-height: 0;
-  cursor: crosshair;
+  min-height: 200px;
   position: relative;
+  overflow: hidden; 
 }
-
 .vp-empty {
   display: flex;
   flex-direction: column;

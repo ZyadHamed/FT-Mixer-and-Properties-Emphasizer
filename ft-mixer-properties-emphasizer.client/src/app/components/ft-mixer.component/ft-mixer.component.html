@@ -198,7 +198,7 @@
         <app-image-viewport [label]="'IMAGE ' + (i + 1)"
                             mode="input"
                             [viewportData]="img.viewportData"
-                            (imageSelected)="onImageSelected($event, i)"
+                            [regionSize]="regionSize" [regionType]="regionType" (imageSelected)="onImageSelected($event, i)"
                             (componentChanged)="onComponentChanged($event, i)"
                             (brightnessContrastChanged)="onBrightnessContrastChanged($event, i)" />
         }
@@ -215,11 +215,10 @@
         <app-image-viewport [label]="'OUTPUT ' + (i + 1)"
                             mode="output"
                             [viewportData]="out.viewportData"
-                            [isActive]="out.active"
+                            [regionSize]="regionSize" [regionType]="regionType" [isActive]="out.active"
                             [isAwaiting]="isMixing && out.active" />
         }
       </div>
     </div>
-
   </div>
 </div>

@@ -235,6 +235,38 @@
   transition: color 0.15s;
 }
 
+
+.region-overlay {
+  position: absolute;
+  
+  z-index: 5;
+  pointer-events: none; 
+  border: 2px dashed rgba(255, 255, 255, 0.7);
+  box-sizing: border-box;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mode-inner {
+  background: rgba(37, 99, 235, 0.3); 
+  box-shadow: 0 0 0 5000px rgba(0, 0, 0, 0.1); 
+}
+
+.mode-outer {
+ 
+  background: transparent;
+  box-shadow: 0 0 0 5000px rgba(15, 23, 42, 0.5);
+}
+
+.mode-inner::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: repeating-linear-gradient( 45deg, transparent, transparent 10px, rgba(255, 255, 255, 0.1) 10px, rgba(255, 255, 255, 0.1) 20px );
+}
+
   .reset-btn:hover {
     color: var(--vp-accent);
   }

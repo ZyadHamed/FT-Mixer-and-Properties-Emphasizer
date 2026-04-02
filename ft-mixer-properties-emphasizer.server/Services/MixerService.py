@@ -53,46 +53,49 @@ class MixerService:
         return result_b64, spatial_arr
 
     # ── Mixing strategies ──────────────────────────────────────────────────
+    
     def _mix_mag_phase(self, ffts_shifted, images, mask):
         h, w = ffts_shifted[0].shape
         mixed_mag   = np.zeros((h, w), dtype=np.float64)
         mixed_phase = np.zeros((h, w), dtype=np.float64)
 
-        total_mag   = sum(img["mag_weight"]   for img in images) or 1.0
-        total_phase = sum(img["phase_weight"] for img in images) or 1.0
-
         for fft_s, img in zip(ffts_shifted, images):
-            mixed_mag   += (img["mag_weight"]   / total_mag)   * np.abs(fft_s)   * mask
-            mixed_phase += (img["phase_weight"] / total_phase) * np.angle(fft_s) * mask
+            mixed_mag   += img["mag_weight"]   * np.abs(fft_s)
+            mixed_phase += img["phase_weight"] * np.angle(fft_s)
 
-        return mixed_mag * np.exp(1j * mixed_phase)
+        combined = mixed_mag * np.exp(1j * mixed_phase)
+        
+        return combined * mask
 
     def _mix_real_imag(self, ffts_shifted, images, mask):
         h, w = ffts_shifted[0].shape
         mixed_real = np.zeros((h, w), dtype=np.float64)
         mixed_imag = np.zeros((h, w), dtype=np.float64)
 
-        total_real = sum(img["mag_weight"]   for img in images) or 1.0
-        total_imag = sum(img["phase_weight"] for img in images) or 1.0
-
         for fft_s, img in zip(ffts_shifted, images):
-            mixed_real += (img["mag_weight"]   / total_real) * np.real(fft_s) * mask
-            mixed_imag += (img["phase_weight"] / total_imag) * np.imag(fft_s) * mask
+            mixed_real += img["mag_weight"]   * np.real(fft_s)
+            mixed_imag += img["phase_weight"] * np.imag(fft_s)
 
-        return mixed_real + 1j * mixed_imag
+        return (mixed_real + 1j * mixed_imag) * mask
 
     # ── Region mask ────────────────────────────────────────────────────────
     @staticmethod
     def _build_mask(h, w, region_size, region_type):
+        
         mask = np.zeros((h, w), dtype=np.float64)
         cy, cx = h // 2, w // 2
-        rh = max(1, int(h * region_size / 200))
-        rw = max(1, int(w * region_size / 200))
-        mask[cy - rh: cy + rh, cx - rw: cx + rw] = 1.0
+        
+       
+        rh = int((h * region_size / 100) / 2)
+        rw = int((w * region_size / 100) / 2)
+        
+        
+        mask[cy - rh : cy + rh, cx - rw : cx + rw] = 1.0
+        
         if region_type == "outer":
             mask = 1.0 - mask
+            
         return mask
-
     @staticmethod
     def _array_to_b64(arr: np.ndarray) -> str:
         buf = io.BytesIO()
