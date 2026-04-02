@@ -59,6 +59,20 @@
           <label class="ctrl-label">Shift Y <span class="val">{{ params.shiftY }}px</span></label>
           <input type="range" class="styled-slider" min="-200" max="200" [(ngModel)]="params.shiftY">
         </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Cyclic</label>
+          <div class="toggle-row">
+            <button class="toggle-btn" [class.active]="params.cyclicShift"  (click)="params.cyclicShift=true">Yes</button>
+            <button class="toggle-btn" [class.active]="!params.cyclicShift" (click)="params.cyclicShift=false">No</button>
+          </div>
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Flip</label>
+          <div class="toggle-row">
+            <button class="toggle-btn" [class.active]="params.flipShift"  (click)="params.flipShift=true">Yes</button>
+            <button class="toggle-btn" [class.active]="!params.flipShift" (click)="params.flipShift=false">No</button>
+          </div>
+        </div>
       }
 
       @if (selectedAction === 'stretch') {
@@ -95,16 +109,23 @@
             <button class="toggle-btn" [class.active]="params.mirrorAxis==='both'"       (click)="params.mirrorAxis='both'">Both</button>
           </div>
         </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Duplicate Mode</label>
+          <div class="toggle-row">
+            <button class="toggle-btn" [class.active]="params.duplicateMode"  (click)="params.duplicateMode=true">Yes</button>
+            <button class="toggle-btn" [class.active]="!params.duplicateMode" (click)="params.duplicateMode=false">No</button>
+          </div>
+        </div>
       }
 
       @if (selectedAction === 'complex_exp') {
         <div class="ctrl-group">
           <label class="ctrl-label">Freq u₀ <span class="val">{{ params.freqU }}</span></label>
-          <input type="range" class="styled-slider" min="-100" max="100" [(ngModel)]="params.freqU">
+          <input type="range" class="styled-slider" min="0" max="2" step="0.01" [(ngModel)]="params.freqU">
         </div>
         <div class="ctrl-group">
           <label class="ctrl-label">Freq v₀ <span class="val">{{ params.freqV }}</span></label>
-          <input type="range" class="styled-slider" min="-100" max="100" [(ngModel)]="params.freqV">
+          <input type="range" class="styled-slider" min="0" max="2" step="0.01" [(ngModel)]="params.freqV">
         </div>
       }
 
@@ -139,6 +160,14 @@
           <label class="ctrl-label">Repeat Count <span class="val">{{ params.ftRepeat }}×</span></label>
           <input type="range" class="styled-slider" min="1" max="8" step="1" [(ngModel)]="params.ftRepeat">
         </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label">Scenario Type</label>
+          <select class="styled-select" [(ngModel)]="params.ftScenarioType">
+            <option value="A">A</option>
+            <option value="B">B</option>
+            <option value="C">C</option>
+          </select>
+        </div>
       }
 
       @if (['even','odd','differentiate','integrate'].includes(selectedAction)) {
@@ -161,7 +190,15 @@
     </div>
 
     <div class="sidebar-footer">
-      <button class="apply-btn" (click)="applyAction()" [disabled]="!originalLoaded">
+      <div class="status-indicator" [class.active]="loading">
+        @if (loading) {
+          <svg class="spin" viewBox="0 0 14 14" fill="none">
+            <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 10"/>
+          </svg>
+          Processing…
+        }
+      </div>
+      <button class="apply-btn" (click)="applyAction()" [disabled]="!originalLoaded || loading">
         <svg viewBox="0 0 14 14" fill="none">
           <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -185,10 +222,6 @@
             <span class="vp-title">Original</span>
             <select class="mini-select" [(ngModel)]="spatialOrigMode">
               <option value="image">Image</option>
-              <option value="magnitude">Magnitude</option>
-              <option value="phase">Phase</option>
-              <option value="real">Real</option>
-              <option value="imaginary">Imaginary</option>
             </select>
           </div>
           <div class="vp-canvas" (dblclick)="browseImage()">
@@ -209,12 +242,15 @@
         <div class="vp-card">
           <div class="vp-header result-header">
             <span class="vp-title">After Action</span>
-            <select class="mini-select" [(ngModel)]="spatialResultMode">
-              <option value="image">Image</option>
-              <option value="magnitude">Magnitude</option>
-              <option value="phase">Phase</option>
-              <option value="real">Real</option>
-              <option value="imaginary">Imaginary</option>
+            <select class="mini-select" [(ngModel)]="spatialResultMode" (ngModelChange)="onSpatialResultModeChange()">
+              @if (!resultIsComplex) {
+                <option value="image">Image</option>
+              } @else {
+                <option value="magnitude">Magnitude</option>
+                <option value="phase">Phase</option>
+                <option value="real">Real</option>
+                <option value="imaginary">Imaginary</option>
+              }
             </select>
           </div>
           <div class="vp-canvas result-canvas" [class.has-result]="resultReady">
@@ -245,7 +281,7 @@
         <div class="vp-card">
           <div class="vp-header ft-header">
             <span class="vp-title">FT of Original</span>
-            <select class="mini-select" [(ngModel)]="ftOrigMode">
+            <select class="mini-select" [(ngModel)]="ftOrigMode" (ngModelChange)="onFtOrigModeChange()">
               <option value="magnitude">Magnitude</option>
               <option value="phase">Phase</option>
               <option value="real">Real</option>
@@ -269,7 +305,7 @@
         <div class="vp-card">
           <div class="vp-header ft-header result-header">
             <span class="vp-title">FT After Action</span>
-            <select class="mini-select" [(ngModel)]="ftResultMode">
+            <select class="mini-select" [(ngModel)]="ftResultMode" (ngModelChange)="onFtResultModeChange()">
               <option value="magnitude">Magnitude</option>
               <option value="phase">Phase</option>
               <option value="real">Real</option>
