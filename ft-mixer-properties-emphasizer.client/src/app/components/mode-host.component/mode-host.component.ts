@@ -5,6 +5,7 @@ import { FtMixerComponent } from '../ft-mixer.component/ft-mixer.component';
 
 @Component({
   selector: 'app-mode-host',
+  standalone: true,
   templateUrl: './mode-host.component.html',
   styleUrls: ['./mode-host.component.css'],
   animations: [

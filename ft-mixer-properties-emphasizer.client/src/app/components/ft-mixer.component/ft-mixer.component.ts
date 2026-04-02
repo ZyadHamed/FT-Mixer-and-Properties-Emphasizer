@@ -1,134 +1,226 @@
 // ft-mixer.component.ts
 import { Component, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DecimalPipe, UpperCasePipe} from '@angular/common';
+import { DecimalPipe } from '@angular/common';
+import { Subject, takeUntil } from 'rxjs';
+import { ImageViewportComponent, ImageViewportData, FtComponent } from '../image-viewport/image-viewport.component';
+import { MixerService, MixRequest } from '../../services/mixer.service';
+import { ImageProcessingService } from '../../services/image-processing.service';
+
+export type UnifyPolicy = 'smallest' | 'largest' | 'fixed';
+export type ComponentPair = 'mag-phase' | 'real-imag';
+export type RegionType = 'inner' | 'outer';
 
 export interface ImageSlot {
-  loaded: boolean;
-  displaySrc: string | null;
-  displayMode: 'image' | 'magnitude' | 'phase' | 'real' | 'imaginary';
+  file: File | null;
+  viewportData: ImageViewportData | null;
   magWeight: number;
   phaseWeight: number;
-  weight: number;
-  brightness: number;
-  contrast: number;
   color: string;
+  activeComponent: FtComponent;
 }
 
 export interface OutputSlot {
-  hasResult: boolean;
-  resultSrc: string | null;
+  viewportData: ImageViewportData | null;
   active: boolean;
 }
 
 @Component({
   selector: 'app-ft-mixer',
+  standalone: true,
   templateUrl: './ft-mixer.component.html',
   styleUrls: ['./ft-mixer.component.css'],
-  imports: [FormsModule, DecimalPipe, UpperCasePipe],
+  imports: [FormsModule, DecimalPipe, ImageViewportComponent],
 })
 export class FtMixerComponent implements OnDestroy {
 
   images: ImageSlot[] = [
-    { loaded: false, displaySrc: null, displayMode: 'image', magWeight: 1, phaseWeight: 1, weight: 1, brightness: 1, contrast: 1, color: '#4a9eff' },
-    { loaded: false, displaySrc: null, displayMode: 'image', magWeight: 1, phaseWeight: 1, weight: 1, brightness: 1, contrast: 1, color: '#3ecf8e' },
-    { loaded: false, displaySrc: null, displayMode: 'image', magWeight: 1, phaseWeight: 1, weight: 1, brightness: 1, contrast: 1, color: '#f7c948' },
-    { loaded: false, displaySrc: null, displayMode: 'image', magWeight: 1, phaseWeight: 1, weight: 1, brightness: 1, contrast: 1, color: '#9b8dff' },
+    this.makeSlot('#4a9eff'),
+    this.makeSlot('#3ecf8e'),
+    this.makeSlot('#f7c948'),
+    this.makeSlot('#9b8dff'),
   ];
 
   outputs: OutputSlot[] = [
-    { hasResult: false, resultSrc: null, active: true },
-    { hasResult: false, resultSrc: null, active: false },
+    { viewportData: null, active: true },
+    { viewportData: null, active: false },
   ];
 
+  unifyPolicy: UnifyPolicy = 'smallest';
+  keepAspectRatio: boolean = true;
+  outputTarget: 0 | 1 = 0;
+  componentPair: ComponentPair = 'mag-phase';
+  regionType: RegionType = 'inner';
   regionSize: number = 40;
-  isMixing: boolean = false;
-  mixProgress: number = 0;
 
-  private mixCancelFlag = false;
-  private mixInterval: any = null;
+  isMixing = false;
+  mixProgress = 0;
 
-  browseImage(index: number): void {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = (e: Event) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          this.images[index].displaySrc = ev.target?.result as string;
-          this.images[index].loaded = true;
-        };
-        reader.readAsDataURL(file);
-      }
+  private cancel$ = new Subject<void>();
+  private destroy$ = new Subject<void>();
+
+  constructor(
+    private mixerService: MixerService,
+    private imageProcessingService: ImageProcessingService,
+  ) { }
+
+  private makeSlot(color: string): ImageSlot {
+    return {
+      file: null,
+      viewportData: null,
+      // Start all 4 at equal share: 1/4 = 0.25
+      magWeight: 0.25,
+      phaseWeight: 0.25,
+      color,
+      activeComponent: 'image',
     };
-    input.click();
   }
 
-  startBrightnessAdjust(event: MouseEvent, index: number): void {
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startBrightness = this.images[index].brightness;
-    const startContrast = this.images[index].contrast;
+  // ── Normalized weight helpers ──────────────────────────────────────────
 
-    const onMove = (e: MouseEvent) => {
-      const dx = (e.clientX - startX) / 200;
-      const dy = (e.clientY - startY) / 200;
-      this.images[index].brightness = Math.max(0.1, Math.min(3, startBrightness - dy));
-      this.images[index].contrast   = Math.max(0.1, Math.min(3, startContrast   + dx));
-    };
-
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    event.preventDefault();
+  /**
+   * Called when the user drags slider for image[index].magWeight.
+   * The raw slider value (0–1) is treated as the *raw* weight for that slot.
+   * We then normalize all slots so sum = 1, preserving relative ratios for others.
+   */
+  onMagWeightChange(index: number, rawValue: number): void {
+    this.images[index].magWeight = rawValue;
+    this._normalizeWeights('mag');
   }
 
-  startMix(): void {
-    if (this.isMixing) {
-      this.cancelMix();
-      setTimeout(() => this.runMix(), 100);
-    } else {
-      this.runMix();
+  onPhaseWeightChange(index: number, rawValue: number): void {
+    this.images[index].phaseWeight = rawValue;
+    this._normalizeWeights('phase');
+  }
+
+  private _normalizeWeights(type: 'mag' | 'phase'): void {
+    const total = this.images.reduce(
+      (sum, img) => sum + (type === 'mag' ? img.magWeight : img.phaseWeight),
+      0,
+    );
+
+    if (total === 0) {
+      // Edge case: all zero → distribute equally
+      const eq = 1 / this.images.length;
+      this.images.forEach(img => {
+        if (type === 'mag') img.magWeight = eq;
+        else img.phaseWeight = eq;
+      });
+      return;
+    }
+
+    this.images.forEach(img => {
+      if (type === 'mag') img.magWeight = img.magWeight / total;
+      else img.phaseWeight = img.phaseWeight / total;
+    });
+  }
+
+  /** Returns the normalized mag weight as a percentage string, e.g. "25.00%" */
+  magPct(img: ImageSlot): string {
+    return (img.magWeight * 100).toFixed(1) + '%';
+  }
+
+  phasePct(img: ImageSlot): string {
+    return (img.phaseWeight * 100).toFixed(1) + '%';
+  }
+
+  // ── Image upload ──────────────────────────────────────────────────────
+  async onImageSelected(file: File, index: number): Promise<void> {
+    this.images[index].file = file;
+    this.images[index].viewportData = null;
+
+    try {
+      const result = await this.imageProcessingService.uploadAndProcess(
+        file, this.unifyPolicy, this.keepAspectRatio,
+      );
+      this.images[index].viewportData = {
+        originalSrc: result.originalSrc,
+        ftComponents: {
+          magnitude: result.magnitude,
+          phase: result.phase,
+          real: result.real,
+          imaginary: result.imaginary,
+        },
+      };
+    } catch (err) {
+      console.error(`Failed to process image ${index + 1}:`, err);
     }
   }
 
-  private runMix(): void {
+  onComponentChanged(component: FtComponent, index: number): void {
+    this.images[index].activeComponent = component;
+  }
+
+  onBrightnessContrastChanged(_val: { brightness: number; contrast: number }, _index: number): void { }
+
+  setOutputTarget(index: 0 | 1): void {
+    this.outputTarget = index;
+    this.outputs.forEach((o, i) => (o.active = i === index));
+  }
+
+  // ── Mix ────────────────────────────────────────────────────────────────
+  startMix(): void {
+    this.cancel$.next();
+
+    const hasImages = this.images.some(img => img.file !== null);
+    if (!hasImages) return;
+
     this.isMixing = true;
     this.mixProgress = 0;
-    this.mixCancelFlag = false;
 
-    // Simulated progress — replace with actual backend call
-    this.mixInterval = setInterval(() => {
-      if (this.mixCancelFlag) {
-        clearInterval(this.mixInterval);
-        this.isMixing = false;
-        this.mixProgress = 0;
-        return;
-      }
-      this.mixProgress += 5;
-      if (this.mixProgress >= 100) {
-        clearInterval(this.mixInterval);
-        this.isMixing = false;
-        this.mixProgress = 100;
-        // TODO: set output result from backend response
-      }
-    }, 100);
+    const request: MixRequest = {
+      images: this.images.map(img => ({
+        file: img.file,
+        magWeight: img.magWeight,
+        phaseWeight: img.phaseWeight,
+      })),
+      componentPair: this.componentPair,
+      regionType: this.regionType,
+      regionSize: this.regionSize,
+      unifyPolicy: this.unifyPolicy,
+      keepAspectRatio: this.keepAspectRatio,
+    };
+
+    this.mixerService
+      .runMix(request)
+      .pipe(takeUntil(this.cancel$), takeUntil(this.destroy$))
+      .subscribe({
+        next: (event) => {
+          if (event.type === 'progress') {
+            this.mixProgress = event.value;
+
+          } else if (event.type === 'result') {
+            this.isMixing = false;
+            this.mixProgress = 100;
+
+            this.outputs[this.outputTarget].viewportData = {
+              originalSrc: event.resultSrc,
+              ftComponents: {
+                magnitude: event.magnitude,
+                phase: event.phase,
+                real: event.real,
+                imaginary: event.imaginary,
+              },
+            };
+          }
+        },
+        error: (err) => {
+          console.error('Mix failed:', err);
+          this.isMixing = false;
+          this.mixProgress = 0;
+        },
+      });
   }
 
   cancelMix(): void {
-    this.mixCancelFlag = true;
-    clearInterval(this.mixInterval);
+    this.cancel$.next();
     this.isMixing = false;
     this.mixProgress = 0;
   }
 
   ngOnDestroy(): void {
-    this.cancelMix();
+    this.cancel$.next();
+    this.destroy$.next();
+    this.destroy$.complete();
   }
 }

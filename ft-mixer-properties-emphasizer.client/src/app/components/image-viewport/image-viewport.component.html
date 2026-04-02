@@ -1,0 +1,103 @@
+<!-- image-viewport.component.html -->
+<div
+  class="viewport-wrapper"
+  [class.output-mode]="mode === 'output'"
+  [class.active]="isActive"
+  [class.has-image]="hasImage"
+>
+
+  <!-- ── Header bar ─────────────────────────────────────────────────── -->
+  <div class="viewport-header">
+    <span class="viewport-label">{{ label }}</span>
+
+    <div class="header-right">
+      <!-- ACTIVE badge (output only) -->
+      <span *ngIf="mode === 'output' && isActive" class="active-badge">ACTIVE</span>
+
+      <!-- FT component selector (always visible) -->
+      <select
+        class="component-select"
+        [ngModel]="selectedComponent"
+        (ngModelChange)="onComponentChange($event)"
+        (click)="$event.stopPropagation()"
+      >
+        <option *ngFor="let opt of componentOptions" [value]="opt.value">
+          {{ opt.label }}
+        </option>
+      </select>
+    </div>
+  </div>
+
+  <!-- ── Main display area ──────────────────────────────────────────── -->
+  <div
+    class="viewport-display"
+    (dblclick)="onViewportDoubleClick()"
+    (mousedown)="onMouseDown($event)"
+    [class.draggable]="hasImage"
+  >
+
+    <!-- Image displayed -->
+    <img
+      *ngIf="hasImage && !isAwaiting"
+      [src]="currentImageSrc"
+      [style.filter]="cssFilter"
+      class="viewport-image"
+      draggable="false"
+      alt="viewport image"
+    />
+
+    <!-- Awaiting spinner (output while mixing) -->
+    <div *ngIf="isAwaiting" class="awaiting-state">
+      <div class="spinner-ring"></div>
+      <span class="awaiting-text">Awaiting mix result</span>
+    </div>
+
+    <!-- Empty state (input, no image loaded) -->
+    <div *ngIf="!hasImage && !isAwaiting && mode === 'input'" class="empty-state">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <line x1="12" y1="8" x2="12" y2="16"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+        </svg>
+      </div>
+      <span class="empty-text">Double-click to open image</span>
+    </div>
+
+    <!-- Empty output state -->
+    <div *ngIf="!hasImage && !isAwaiting && mode === 'output'" class="empty-state">
+      <div class="empty-icon muted">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <span class="empty-text muted">Awaiting mix result</span>
+    </div>
+
+  </div>
+
+  <!-- ── Footer hint bar ────────────────────────────────────────────── -->
+  <div class="viewport-footer" *ngIf="hasImage">
+    <span class="footer-hint">
+      ↑↓ brightness · ←→ contrast
+    </span>
+    <button
+      class="reset-btn"
+      (click)="resetBrightnessContrast(); $event.stopPropagation()"
+      title="Reset brightness & contrast"
+    >
+      ↺
+    </button>
+  </div>
+
+  <!-- Hidden file input -->
+  <input
+    #fileInput
+    type="file"
+    accept="image/*"
+    style="display:none"
+    (change)="onFileSelected($event)"
+  />
+
+</div>

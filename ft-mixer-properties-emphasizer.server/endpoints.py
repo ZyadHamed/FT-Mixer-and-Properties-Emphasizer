@@ -1,4 +1,4 @@
-import os
+﻿import os
 import base64
 import numpy as np
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ from Services.FrequencyTransformService import (
     MultipleFourierTransforms, ReconstructImageFromFFT, prepare_fft_for_display,
     prepare_complex_spatial_for_display, arr_to_bytes
 )
+from Services.MixerService import MixerService
 
 app = FastAPI()
 origins = ["*"]
@@ -34,10 +35,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+mixer_service = MixerService()
 
 
-# complex_input: JSON string: {real, imag, shape}
-async def parse_image_input(image: Optional[UploadFile],complex_input: Optional[str]) -> np.ndarray:
+# ── Shared helpers ────────────────────────────────────────────────────────────
+
+async def parse_image_input(image: Optional[UploadFile], complex_input: Optional[str]) -> np.ndarray:
     if complex_input is not None:
         try:
             data = json.loads(complex_input)
@@ -48,14 +51,11 @@ async def parse_image_input(image: Optional[UploadFile],complex_input: Optional[
                 imag_part = np.array(data["imag"], dtype=np.float32).reshape(shape)
                 return (real_part + 1j * imag_part).astype(np.complex64)
             else:
-                return real_part  # purely real, stored as float32
+                return real_part
 
         except (KeyError, ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Malformed complex_input JSON: {exc}"
-            )
-        
+            raise HTTPException(status_code=400, detail=f"Malformed complex_input JSON: {exc}")
+
     if image is not None:
         img_data = await image.read()
         pil_image = Image.open(io.BytesIO(img_data)).convert("L")
@@ -65,23 +65,9 @@ async def parse_image_input(image: Optional[UploadFile],complex_input: Optional[
         status_code=400,
         detail="Provide either 'image' (file upload) or 'complex_input' (JSON)."
     )
-import io
-import json
-import numpy as np
-from PIL import Image
-from fastapi.responses import StreamingResponse
+
 
 def stream_array(arr: np.ndarray) -> StreamingResponse:
-    """
-    Stream a numpy array. 
-    - If real: returns a single JPEG image.
-    - If complex: uses `prepare_fft_for_display` to process components, 
-      then returns a multipart/form-data response with JSON metadata 
-      and 4 JPEG representations (magnitude, phase, real, imaginary).
-    """
-    # ==========================================
-    # SCENARIO 1: REAL ARRAY (Single Image)
-    # ==========================================
     if not np.iscomplexobj(arr):
         arr_uint8 = arr if arr.dtype == np.uint8 else np.clip(arr * 255, 0, 255).astype(np.uint8)
         buffer = io.BytesIO()
@@ -89,12 +75,9 @@ def stream_array(arr: np.ndarray) -> StreamingResponse:
         buffer.seek(0)
         return StreamingResponse(buffer, media_type="image/jpeg")
 
-    # ==========================================
-    # SCENARIO 2: COMPLEX ARRAY (Multipart FFT)
-    # ==========================================
     boundary = "fourier_boundary"
-    def arr_to_bytes(a: np.ndarray) -> bytes:
-        """Converts a 0.0-1.0 float array directly to JPEG bytes."""
+
+    def _arr_to_bytes(a: np.ndarray) -> bytes:
         a_uint8 = np.clip(a * 255.0, 0, 255).astype(np.uint8)
         buf = io.BytesIO()
         Image.fromarray(a_uint8).save(buf, format="JPEG", quality=95)
@@ -108,21 +91,13 @@ def stream_array(arr: np.ndarray) -> StreamingResponse:
         ).encode("utf-8")
         return header + content + b"\r\n"
 
-    # --- 1. Process Complex Array ---
     F_raw, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(arr)
 
-    # --- 3. Convert 4 normalized display images to JPEG bytes ---
-    mag_bytes   = arr_to_bytes(mag_disp)
-    phase_bytes = arr_to_bytes(phase_disp)
-    real_bytes  = arr_to_bytes(real_disp)
-    imag_bytes  = arr_to_bytes(imag_disp)
-
-    # --- 4. Build multipart response ---
     body = b""
-    body += build_part("magnitude", mag_bytes,                     "image/jpeg")
-    body += build_part("phase",     phase_bytes,                   "image/jpeg")
-    body += build_part("real",      real_bytes,                    "image/jpeg")
-    body += build_part("imaginary", imag_bytes,                    "image/jpeg")
+    body += build_part("magnitude", _arr_to_bytes(mag_disp),   "image/jpeg")
+    body += build_part("phase",     _arr_to_bytes(phase_disp), "image/jpeg")
+    body += build_part("real",      _arr_to_bytes(real_disp),  "image/jpeg")
+    body += build_part("imaginary", _arr_to_bytes(imag_disp),  "image/jpeg")
     body += f"--{boundary}--\r\n".encode("utf-8")
 
     return StreamingResponse(
@@ -130,8 +105,8 @@ def stream_array(arr: np.ndarray) -> StreamingResponse:
         media_type=f"multipart/form-data; boundary={boundary}",
     )
 
+
 def build_multipart_response_for_complex_exponential(img_complex: np.ndarray, boundary: str) -> StreamingResponse:
-    """Serialize a complex (or real) array + 4 display images as multipart."""
     _, display_magnitude, display_phase, display_real, display_imaginary = \
         prepare_complex_spatial_for_display(img_complex)
 
@@ -154,6 +129,11 @@ def build_multipart_response_for_complex_exponential(img_complex: np.ndarray, bo
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Part B – FT Properties Emphasizer  (existing endpoints, unchanged)
+# ══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/shiftimage")
 async def ShiftImageEndpoint(
@@ -265,6 +245,7 @@ async def MultiplyByWindowEndpoint(
     windowed, _ = MultiplyByWindow(arr, window_type=window_type, **kwargs)
     return stream_array(windowed)
 
+
 @app.post("/fft")
 async def FFTEndpoint(
     scenario_type: str = Form(..., description="A | B | C"),
@@ -272,26 +253,18 @@ async def FFTEndpoint(
     image: Optional[UploadFile] = File(None),
     complex_input: Optional[str] = Form(None),
 ):
-    # --- Load image OR complex array ---
-    # This replaces the manual `image.read()` and PIL conversion,
-    # routing either the uploaded file or the complex JSON string into `arr`
     arr = await parse_image_input(image, complex_input)
-
-    # --- Run function ---
     final_output, mag, phase, real, imag = MultipleFourierTransforms(
         arr, n=n, scenario_type=scenario_type
     )
 
-    # --- Convert 4 display images to JPEG bytes ---
-    # (Assuming arr_to_bytes is defined globally or imported)
     mag_bytes   = arr_to_bytes(mag)
     phase_bytes = arr_to_bytes(phase)
     real_bytes  = arr_to_bytes(real)
     imag_bytes  = arr_to_bytes(imag)
 
-    # --- Build multipart response ---
     boundary = "fourier_boundary"
-    
+
     def build_part(name: str, content: bytes, content_type: str) -> bytes:
         header = (
             f"--{boundary}\r\n"
@@ -301,16 +274,17 @@ async def FFTEndpoint(
         return header + content + b"\r\n"
 
     body = b""
-    body += build_part("magnitude", mag_bytes,                         "image/jpeg")
-    body += build_part("phase",     phase_bytes,                       "image/jpeg")
-    body += build_part("real",      real_bytes,                        "image/jpeg")
-    body += build_part("imaginary", imag_bytes,                        "image/jpeg")
+    body += build_part("magnitude", mag_bytes,   "image/jpeg")
+    body += build_part("phase",     phase_bytes, "image/jpeg")
+    body += build_part("real",      real_bytes,  "image/jpeg")
+    body += build_part("imaginary", imag_bytes,  "image/jpeg")
     body += f"--{boundary}--\r\n".encode("utf-8")
 
     return StreamingResponse(
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",
     )
+
 
 @app.post("/ifft")
 async def IFFTEndpoint(
@@ -322,47 +296,35 @@ async def IFFTEndpoint(
     result = ReconstructImageFromFFT(arr, wasShifted)
     return stream_array(result)
 
+
 @app.post("/fft_then_operate")
 async def FftThenOperateEndpoint(
     action: str = Form(...),
-    # Shift
     shift_x: int = Form(0),
     shift_y: int = Form(0),
     cyclic:  bool = Form(True),
     flip:    bool = Form(False),
-    # Stretch
     stretch_x: float = Form(1.0),
     stretch_y: float = Form(1.0),
-    # Rotate
     angle: float = Form(0.0),
-    # Mirror
     mirror_axis:    str  = Form("horizontal"),
     duplicate_mode: bool = Form(False),
-    # Complex exponential
     amplitude: float = Form(1.0),
     freq_u:    float = Form(0.0),
     freq_v:    float = Form(0.0),
-    # Window
     window_type: str   = Form("gaussian"),
     sigma_x:     float = Form(30.0),
     sigma_y:     float = Form(30.0),
-    # Symmetry / calculus
     symmetry_type: str = Form("even"),
     axis:          str = Form("x"),
-    # FT repeat
     scenario_type: str = Form("B"),
     n:             int = Form(1),
-    # Image input
     image: Optional[UploadFile] = File(None),
     complex_input: Optional[str] = Form(None),
 ):
-    # 1. Parse input
     arr = await parse_image_input(image, complex_input)
-
-    # 2. FFT the input first
     fft_result, _, _, _, _ = MultipleFourierTransforms(arr, n=1, scenario_type="A")
 
-    # 3. Apply the chosen operation on the FFT result
     if action == "shift":
         operated = ShiftImage(fft_result, shift_x, shift_y, cyclic=cyclic, flip=flip)
     elif action == "stretch":
@@ -388,18 +350,15 @@ async def FftThenOperateEndpoint(
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
-    # 4. IFFT back to spatial domain
     spatial_result = ReconstructImageFromFFT(operated, was_shifted=False)
     spatial_bytes = arr_to_bytes(
         np.clip(np.real(spatial_result), 0, 1).astype(np.float32)
         if np.iscomplexobj(spatial_result)
         else np.clip(spatial_result, 0, 1).astype(np.float32)
     )
- 
-    # 5. Also compute FFT of the operated result for the frequency display
+
     _, mag, phase, real, imag = prepare_fft_for_display(operated)
 
-    # 6. Return multipart: spatial image + 4 FFT display images + metadata
     boundary = "fft_operate_boundary"
 
     def build_part(name: str, content: bytes, content_type: str) -> bytes:
@@ -411,14 +370,131 @@ async def FftThenOperateEndpoint(
         return header + content + b"\r\n"
 
     body = b""
-    body += build_part("spatial",    spatial_bytes,    "image/jpeg")
-    body += build_part("magnitude",  arr_to_bytes(mag),   "image/jpeg")
-    body += build_part("phase",      arr_to_bytes(phase), "image/jpeg")
-    body += build_part("real",       arr_to_bytes(real),  "image/jpeg")
-    body += build_part("imaginary",  arr_to_bytes(imag),  "image/jpeg")
+    body += build_part("spatial",   spatial_bytes,       "image/jpeg")
+    body += build_part("magnitude", arr_to_bytes(mag),   "image/jpeg")
+    body += build_part("phase",     arr_to_bytes(phase), "image/jpeg")
+    body += build_part("real",      arr_to_bytes(real),  "image/jpeg")
+    body += build_part("imaginary", arr_to_bytes(imag),  "image/jpeg")
     body += f"--{boundary}--\r\n".encode("utf-8")
 
     return StreamingResponse(
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Part A – FT Mixer  (new endpoints)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/image/upload")
+async def UploadImageEndpoint(
+    image:           UploadFile = File(...),
+    unify_policy:    str  = Form("smallest"),
+    keep_aspect_ratio: bool = Form(True),
+):
+    """
+    Accepts a single image.
+    Returns original + all 4 FT component images as base64 JPEGs.
+    """
+    image_bytes = await image.read()
+
+    # Convert to grayscale numpy array (0–255 uint8)
+    pil_img = Image.open(io.BytesIO(image_bytes)).convert("L")
+    arr = np.array(pil_img, dtype=np.float32) / 255.0   # 0.0–1.0
+
+    # Compute FFT components
+    fft        = np.fft.fft2(arr)
+    fft_shift  = np.fft.fftshift(fft)
+
+    _, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(fft_shift)
+
+    def to_b64(a: np.ndarray) -> str:
+        uint8 = np.clip(a * 255, 0, 255).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(uint8).save(buf, format="JPEG", quality=95)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # Original image as base64
+    orig_uint8 = np.clip(arr * 255, 0, 255).astype(np.uint8)
+    orig_buf = io.BytesIO()
+    Image.fromarray(orig_uint8).save(orig_buf, format="JPEG", quality=95)
+    orig_b64 = base64.b64encode(orig_buf.getvalue()).decode("utf-8")
+
+    return JSONResponse({
+        "original":  orig_b64,
+        "magnitude": to_b64(mag_disp),
+        "phase":     to_b64(phase_disp),
+        "real":      to_b64(real_disp),
+        "imaginary": to_b64(imag_disp),
+    })
+
+
+@app.post("/api/mixer/run")
+async def RunMixEndpoint(
+    image_0: Optional[UploadFile] = File(None),
+    image_1: Optional[UploadFile] = File(None),
+    image_2: Optional[UploadFile] = File(None),
+    image_3: Optional[UploadFile] = File(None),
+    mag_weight_0:   float = Form(1.0),
+    mag_weight_1:   float = Form(1.0),
+    mag_weight_2:   float = Form(1.0),
+    mag_weight_3:   float = Form(1.0),
+    phase_weight_0: float = Form(1.0),
+    phase_weight_1: float = Form(1.0),
+    phase_weight_2: float = Form(1.0),
+    phase_weight_3: float = Form(1.0),
+    component_pair:    str   = Form("mag-phase"),
+    region_type:       str   = Form("inner"),
+    region_size:       float = Form(40.0),
+    unify_policy:      str   = Form("smallest"),
+    keep_aspect_ratio: bool  = Form(True),
+):
+    uploaded = [
+        (image_0, mag_weight_0, phase_weight_0),
+        (image_1, mag_weight_1, phase_weight_1),
+        (image_2, mag_weight_2, phase_weight_2),
+        (image_3, mag_weight_3, phase_weight_3),
+    ]
+ 
+    images = []
+    for upload_file, mw, pw in uploaded:
+        if upload_file is not None:
+            images.append({
+                "bytes":        await upload_file.read(),
+                "mag_weight":   mw,
+                "phase_weight": pw,
+            })
+ 
+    if not images:
+        raise HTTPException(status_code=400, detail="No images provided.")
+ 
+    # mix() returns (result_b64, spatial_arr)
+    result_b64, spatial_arr = mixer_service.mix(
+        images=images,
+        component_pair=component_pair,
+        region_type=region_type,
+        region_size=region_size,
+        unify_policy=unify_policy,
+        keep_aspect_ratio=keep_aspect_ratio,
+    )
+ 
+    # Compute FT components of the mixed result
+    arr_norm  = spatial_arr.astype(np.float32) / 255.0
+    fft_shift = np.fft.fftshift(np.fft.fft2(arr_norm))
+    _, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(fft_shift)
+ 
+    def to_b64(a: np.ndarray) -> str:
+        uint8 = np.clip(a * 255, 0, 255).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(uint8).save(buf, format="JPEG", quality=95)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+ 
+    return JSONResponse({
+        "result_image": result_b64,
+        "magnitude":    to_b64(mag_disp),
+        "phase":        to_b64(phase_disp),
+        "real":         to_b64(real_disp),
+        "imaginary":    to_b64(imag_disp),
+    })
+ 
