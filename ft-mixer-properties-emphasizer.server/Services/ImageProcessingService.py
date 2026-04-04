@@ -149,33 +149,56 @@ def IntegrateImage(image, axis='x'):
         raise ValueError("Axis must be 'x' or 'y'")
 
 
-def MultiplyByWindow(image, window_type='hamming', **kwargs):
+def MultiplyByWindow(image, window_width, window_height, center_x, center_y, window_type='hamming', **kwargs):
     img_array = np.asarray(image)
     rows, cols = img_array.shape
     
+    # Calculate the starting and ending indices for the window placement
+    start_y = center_y - (window_height // 2)
+    end_y = start_y + window_height
+    
+    start_x = center_x - (window_width // 2)
+    end_x = start_x + window_width
+    
+    # Check if the window bounds fall outside the image dimensions
+    if start_y < 0 or end_y > rows or start_x < 0 or end_x > cols:
+        raise ValueError(
+            f"Window placement is impossible. A ({window_width}x{window_height}) window "
+            f"centered at ({center_x}, {center_y}) exceeds the image bounds of ({cols}x{rows})."
+        )
+    
+    # Generate the 1D windows using the provided width and height
     if window_type == 'rectangular':
-        win_y = np.ones(rows)
-        win_x = np.ones(cols)
+        win_y = np.ones(window_height)
+        win_x = np.ones(window_width)
         
     elif window_type == 'hamming':
-        win_y = np.hamming(rows)
-        win_x = np.hamming(cols)
+        win_y = np.hamming(window_height)
+        win_x = np.hamming(window_width)
         
     elif window_type == 'hanning':
-        win_y = np.hanning(rows)
-        win_x = np.hanning(cols)
+        win_y = np.hanning(window_height)
+        win_x = np.hanning(window_width)
         
     elif window_type == 'gaussian':
-        sigma_y = kwargs.get('sigma_y', rows / 6)
-        sigma_x = kwargs.get('sigma_x', cols / 6)
-        y = np.arange(rows) - rows / 2
-        x = np.arange(cols) - cols / 2
+        sigma_y = kwargs.get('sigma_y', window_height / 6)
+        sigma_x = kwargs.get('sigma_x', window_width / 6)
+        y = np.arange(window_height) - window_height / 2
+        x = np.arange(window_width) - window_width / 2
         win_y = np.exp(-(y**2) / (2 * sigma_y**2))
         win_x = np.exp(-(x**2) / (2 * sigma_x**2))
         
     else:
         raise ValueError("Unsupported window type.")
 
+    # Create the 2D window of size (window_height, window_width)
     window_2d = np.outer(win_y, win_x)
     
-    return img_array * window_2d, window_2d
+    # Create a zero matrix matching the original image dimensions
+    padded_window = np.zeros((rows, cols))
+    
+    # Embed the 2D window into the zero matrix at the specified coordinates
+    padded_window[start_y:end_y, start_x:end_x] = window_2d
+    
+    # Return the multiplied image and the padded window
+    return img_array * padded_window

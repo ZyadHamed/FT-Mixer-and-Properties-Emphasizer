@@ -109,20 +109,29 @@ def stream_array(arr: np.ndarray) -> StreamingResponse:
         return header + content + b"\r\n"
 
     # --- 1. Process Complex Array ---
-    F_raw, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(arr)
+    _, shifted_mag, shifted_phase, shifted_real, shifted_imag, unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag = prepare_fft_for_display(arr)
 
     # --- 3. Convert 4 normalized display images to JPEG bytes ---
-    mag_bytes   = arr_to_bytes(mag_disp)
-    phase_bytes = arr_to_bytes(phase_disp)
-    real_bytes  = arr_to_bytes(real_disp)
-    imag_bytes  = arr_to_bytes(imag_disp)
+    shifted_mag_bytes   = arr_to_bytes(shifted_mag)
+    shifted_phase_bytes = arr_to_bytes(shifted_phase)
+    shifted_real_bytes  = arr_to_bytes(shifted_real)
+    shifted_imag_bytes  = arr_to_bytes(shifted_imag)
+
+    unshifted_mag_bytes   = arr_to_bytes(unshifted_mag)
+    unshifted_phase_bytes = arr_to_bytes(unshifted_phase)
+    unshifted_real_bytes  = arr_to_bytes(unshifted_real)
+    unshifted_imag_bytes  = arr_to_bytes(unshifted_imag)
 
     # --- 4. Build multipart response ---
     body = b""
-    body += build_part("magnitude", mag_bytes,                     "image/jpeg")
-    body += build_part("phase",     phase_bytes,                   "image/jpeg")
-    body += build_part("real",      real_bytes,                    "image/jpeg")
-    body += build_part("imaginary", imag_bytes,                    "image/jpeg")
+    body += build_part("magnitude", shifted_mag_bytes,                     "image/jpeg")
+    body += build_part("phase",     shifted_phase_bytes,                   "image/jpeg")
+    body += build_part("real",      shifted_real_bytes,                    "image/jpeg")
+    body += build_part("imaginary", shifted_imag_bytes,                    "image/jpeg")
+    body += build_part("unshifted_magnitude", unshifted_mag_bytes,                     "image/jpeg")
+    body += build_part("unshifted_phase",     unshifted_phase_bytes,                   "image/jpeg")
+    body += build_part("unshifted_real",      unshifted_real_bytes,                    "image/jpeg")
+    body += build_part("unshifted_imaginary", unshifted_imag_bytes,                    "image/jpeg")
     body += f"--{boundary}--\r\n".encode("utf-8")
 
     return StreamingResponse(
@@ -253,6 +262,10 @@ async def IntegrateImageEndpoint(
 @app.post("/multiplybywindow")
 async def MultiplyByWindowEndpoint(
     window_type: str = Form(...),
+    window_width: int = Form(...),
+    window_height: int = Form(...),
+    center_x: int = Form(...),
+    center_y: int = Form(...),
     sigma_x: Optional[float] = Query(None),
     sigma_y: Optional[float] = Query(None),
     image:         Optional[UploadFile] = File(None),
@@ -262,7 +275,7 @@ async def MultiplyByWindowEndpoint(
     kwargs = {}
     if sigma_x is not None: kwargs["sigma_x"] = sigma_x
     if sigma_y is not None: kwargs["sigma_y"] = sigma_y
-    windowed, _ = MultiplyByWindow(arr, window_type=window_type, **kwargs)
+    windowed = MultiplyByWindow(arr, window_width, window_height, center_x, center_y, window_type=window_type, **kwargs)
     return stream_array(windowed)
 
 @app.post("/fft")
@@ -278,39 +291,11 @@ async def FFTEndpoint(
     arr = await parse_image_input(image, complex_input)
 
     # --- Run function ---
-    final_output, mag, phase, real, imag = MultipleFourierTransforms(
+    final_output, *_ = MultipleFourierTransforms(
         arr, n=n, scenario_type=scenario_type
     )
 
-    # --- Convert 4 display images to JPEG bytes ---
-    # (Assuming arr_to_bytes is defined globally or imported)
-    mag_bytes   = arr_to_bytes(mag)
-    phase_bytes = arr_to_bytes(phase)
-    real_bytes  = arr_to_bytes(real)
-    imag_bytes  = arr_to_bytes(imag)
-
-    # --- Build multipart response ---
-    boundary = "fourier_boundary"
-    
-    def build_part(name: str, content: bytes, content_type: str) -> bytes:
-        header = (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"\r\n'
-            f"Content-Type: {content_type}\r\n\r\n"
-        ).encode("utf-8")
-        return header + content + b"\r\n"
-
-    body = b""
-    body += build_part("magnitude", mag_bytes,                         "image/jpeg")
-    body += build_part("phase",     phase_bytes,                       "image/jpeg")
-    body += build_part("real",      real_bytes,                        "image/jpeg")
-    body += build_part("imaginary", imag_bytes,                        "image/jpeg")
-    body += f"--{boundary}--\r\n".encode("utf-8")
-
-    return StreamingResponse(
-        io.BytesIO(body),
-        media_type=f"multipart/form-data; boundary={boundary}",
-    )
+    return stream_array(final_output)
 
 @app.post("/ifft")
 async def IFFTEndpoint(
@@ -344,6 +329,10 @@ async def FftThenOperateEndpoint(
     freq_v:    float = Form(0.0),
     # Window
     window_type: str   = Form("gaussian"),
+    window_width: int = Form(...),
+    window_height: int = Form(...),
+    center_x: int = Form(...),
+    center_y: int = Form(...),
     sigma_x:     float = Form(30.0),
     sigma_y:     float = Form(30.0),
     # Symmetry / calculus
@@ -360,7 +349,7 @@ async def FftThenOperateEndpoint(
     arr = await parse_image_input(image, complex_input)
 
     # 2. FFT the input first
-    fft_result, _, _, _, _ = MultipleFourierTransforms(arr, n=1, scenario_type="A")
+    fft_result, *_ = MultipleFourierTransforms(arr, n=1, scenario_type="A")
 
     # 3. Apply the chosen operation on the FFT result
     if action == "shift":
@@ -378,7 +367,7 @@ async def FftThenOperateEndpoint(
     elif action == "complex_exp":
         operated = MultiplyImageByComplexExponential(fft_result, 1, freq_u, freq_v)
     elif action == "window":
-        operated, _ = MultiplyByWindow(fft_result, window_type=window_type, sigma_x=sigma_x, sigma_y=sigma_y)
+        operated = MultiplyByWindow(fft_result, window_width, window_height, center_x, center_y, window_type=window_type, sigma_x=sigma_x, sigma_y=sigma_y)
     elif action == "differentiate":
         operated = DifferentiateImage(fft_result, axis)
     elif action == "integrate":
@@ -397,11 +386,20 @@ async def FftThenOperateEndpoint(
     )
  
     # 5. Also compute FFT of the operated result for the frequency display
-    _, mag, phase, real, imag = prepare_fft_for_display(operated)
+    _, shifted_mag, shifted_phase, shifted_real, shifted_imag, unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag = prepare_fft_for_display(operated)
 
-    # 6. Return multipart: spatial image + 4 FFT display images + metadata
-    boundary = "fft_operate_boundary"
+    # --- 3. Convert 4 normalized display images to JPEG bytes ---
+    shifted_mag_bytes   = arr_to_bytes(shifted_mag)
+    shifted_phase_bytes = arr_to_bytes(shifted_phase)
+    shifted_real_bytes  = arr_to_bytes(shifted_real)
+    shifted_imag_bytes  = arr_to_bytes(shifted_imag)
 
+    unshifted_mag_bytes   = arr_to_bytes(unshifted_mag)
+    unshifted_phase_bytes = arr_to_bytes(unshifted_phase)
+    unshifted_real_bytes  = arr_to_bytes(unshifted_real)
+    unshifted_imag_bytes  = arr_to_bytes(unshifted_imag)
+
+    
     def build_part(name: str, content: bytes, content_type: str) -> bytes:
         header = (
             f"--{boundary}\r\n"
@@ -410,14 +408,21 @@ async def FftThenOperateEndpoint(
         ).encode("utf-8")
         return header + content + b"\r\n"
 
+
+    boundary = "fft_operate_boundary"
+    # --- 4. Build multipart response ---
     body = b""
     body += build_part("spatial",    spatial_bytes,    "image/jpeg")
-    body += build_part("magnitude",  arr_to_bytes(mag),   "image/jpeg")
-    body += build_part("phase",      arr_to_bytes(phase), "image/jpeg")
-    body += build_part("real",       arr_to_bytes(real),  "image/jpeg")
-    body += build_part("imaginary",  arr_to_bytes(imag),  "image/jpeg")
+    body += build_part("magnitude", shifted_mag_bytes,                     "image/jpeg")
+    body += build_part("phase",     shifted_phase_bytes,                   "image/jpeg")
+    body += build_part("real",      shifted_real_bytes,                    "image/jpeg")
+    body += build_part("imaginary", shifted_imag_bytes,                    "image/jpeg")
+    body += build_part("unshifted_magnitude", unshifted_mag_bytes,                     "image/jpeg")
+    body += build_part("unshifted_phase",     unshifted_phase_bytes,                   "image/jpeg")
+    body += build_part("unshifted_real",      unshifted_real_bytes,                    "image/jpeg")
+    body += build_part("unshifted_imaginary", unshifted_imag_bytes,                    "image/jpeg")
     body += f"--{boundary}--\r\n".encode("utf-8")
-
+    
     return StreamingResponse(
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",

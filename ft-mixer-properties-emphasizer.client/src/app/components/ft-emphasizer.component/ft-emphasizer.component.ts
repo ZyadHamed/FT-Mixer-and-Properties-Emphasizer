@@ -1,6 +1,6 @@
-import { Component, ChangeDetectorRef } from '@angular/core';
+import { Component, ChangeDetectorRef, ElementRef, ViewChild, AfterViewInit, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DecimalPipe } from '@angular/common';
+import { DecimalPipe, NgStyle } from '@angular/common';
 
 export type EmphasizerAction =
   | 'shift' | 'stretch' | 'mirror' | 'rotate'
@@ -26,6 +26,8 @@ export interface EmphasizerParams {
   sigma: number;
   windowW: number;
   windowH: number;
+  windowCenterX: number;
+  windowCenterY: number;
   ftRepeat: number;
   ftScenarioType: 'A' | 'B' | 'C';
   chainFT: number;
@@ -37,9 +39,13 @@ const BASE = 'http://127.0.0.1:8000';
   selector: 'app-ft-emphasizer',
   templateUrl: './ft-emphasizer.component.html',
   styleUrls: ['./ft-emphasizer.component.css'],
-  imports: [FormsModule, DecimalPipe],
+  imports: [FormsModule, DecimalPipe, NgStyle],
 })
-export class FtEmphasizerComponent {
+export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
+
+  // ViewChild refs for the two input canvases that can show the window overlay
+  @ViewChild('spatialOrigCanvas') spatialOrigCanvasRef!: ElementRef<HTMLDivElement>;
+  @ViewChild('ftOrigCanvas')      ftOrigCanvasRef!: ElementRef<HTMLDivElement>;
 
   constructor(private cdr: ChangeDetectorRef) {}
 
@@ -53,6 +59,7 @@ export class FtEmphasizerComponent {
     mirrorAxis: 'horizontal', duplicateMode: false,
     freqU: 0, freqV: 0,
     windowType: 'gaussian', sigma: 30, windowW: 256, windowH: 256,
+    windowCenterX: 0, windowCenterY: 0,
     ftRepeat: 1, ftScenarioType: 'A',
     chainFT: 0,
   };
@@ -62,6 +69,12 @@ export class FtEmphasizerComponent {
   resultReady    = false;
   loading        = false;
   resultIsComplex = false;
+  ftOrigShifted  = true;
+  ftResultShifted = true;
+
+  // Natural image dimensions (pixels) — populated once the image loads
+  imageNaturalW = 512;
+  imageNaturalH = 512;
 
   private originalFile: File | null = null;
 
@@ -83,21 +96,135 @@ export class FtEmphasizerComponent {
   private _pendingComplexBlobs: Record<string, string> | null = null;
   private spatialResultBlobs: Record<string, string> = {};
 
+  // ─── Window overlay drag state ────────────────────────────────
+  isDraggingWindow = false;
+  private dragStartMouseX = 0;
+  private dragStartMouseY = 0;
+  private dragStartCenterX = 0;
+  private dragStartCenterY = 0;
+  private boundMouseMove!: (e: MouseEvent) => void;
+  private boundMouseUp!:   (e: MouseEvent) => void;
+
+  // ─── Computed helpers for window sliders & overlay ────────────
+
+  /** Half-widths so that the window fully stays within the image. */
+  get windowCenterXMin(): number { return -Math.floor((this.imageNaturalW - this.params.windowW) / 2); }
+  get windowCenterXMax(): number { return  Math.floor((this.imageNaturalW - this.params.windowW) / 2); }
+  get windowCenterYMin(): number { return -Math.floor((this.imageNaturalH - this.params.windowH) / 2); }
+  get windowCenterYMax(): number { return  Math.floor((this.imageNaturalH - this.params.windowH) / 2); }
+
+  /** Clamp center values whenever window size changes so they remain valid. */
+  clampWindowCenter(): void {
+    this.params.windowCenterX = Math.max(this.windowCenterXMin, Math.min(this.windowCenterXMax, this.params.windowCenterX));
+    this.params.windowCenterY = Math.max(this.windowCenterYMin, Math.min(this.windowCenterYMax, this.params.windowCenterY));
+  }
+
+  /**
+   * Returns the overlay rectangle style (percentages relative to the vp-canvas element)
+   * for the window overlay on the active input panel.
+   */
+  get windowOverlayStyle(): Record<string, string> {
+    const W = this.imageNaturalW;
+    const H = this.imageNaturalH;
+    const ww = Math.min(this.params.windowW, W);
+    const wh = Math.min(this.params.windowH, H);
+    // top-left corner in image pixel coords (image center = W/2, H/2)
+    const left = (W / 2 + this.params.windowCenterX - ww / 2);
+    const top  = (H / 2 + this.params.windowCenterY - wh / 2);
+    return {
+      left:   `${(left / W) * 100}%`,
+      top:    `${(top  / H) * 100}%`,
+      width:  `${(ww   / W) * 100}%`,
+      height: `${(wh   / H) * 100}%`,
+    };
+  }
+
+  /** True when the window overlay should be shown on the spatial-original panel. */
+  get showWindowOnSpatial(): boolean {
+    return this.selectedAction === 'window' && this.domain === 'spatial' && this.originalLoaded;
+  }
+
+  /** True when the window overlay should be shown on the FT-original panel. */
+  get showWindowOnFt(): boolean {
+    return this.selectedAction === 'window' && this.domain === 'frequency' && this.originalLoaded;
+  }
+
+  // ─── Lifecycle ────────────────────────────────────────────────
+  ngAfterViewInit(): void {
+    this.boundMouseMove = this.onWindowDragMove.bind(this);
+    this.boundMouseUp   = this.onWindowDragEnd.bind(this);
+  }
+
+  ngOnDestroy(): void {
+    document.removeEventListener('mousemove', this.boundMouseMove);
+    document.removeEventListener('mouseup',   this.boundMouseUp);
+  }
+
+  // ─── Window overlay drag handlers ─────────────────────────────
+
+  onWindowDragStart(event: MouseEvent, canvasEl: HTMLDivElement): void {
+    event.preventDefault();
+    this.isDraggingWindow   = true;
+    this.dragStartMouseX    = event.clientX;
+    this.dragStartMouseY    = event.clientY;
+    this.dragStartCenterX   = this.params.windowCenterX;
+    this.dragStartCenterY   = this.params.windowCenterY;
+
+    // Scale: canvas display width → image pixel width
+    const rect = canvasEl.getBoundingClientRect();
+    this._dragScaleX = this.imageNaturalW / rect.width;
+    this._dragScaleY = this.imageNaturalH / rect.height;
+
+    document.addEventListener('mousemove', this.boundMouseMove);
+    document.addEventListener('mouseup',   this.boundMouseUp);
+  }
+
+  private _dragScaleX = 1;
+  private _dragScaleY = 1;
+
+  private onWindowDragMove(event: MouseEvent): void {
+    if (!this.isDraggingWindow) return;
+    const dx = (event.clientX - this.dragStartMouseX) * this._dragScaleX;
+    const dy = (event.clientY - this.dragStartMouseY) * this._dragScaleY;
+    this.params.windowCenterX = Math.max(this.windowCenterXMin, Math.min(this.windowCenterXMax, Math.round(this.dragStartCenterX + dx)));
+    this.params.windowCenterY = Math.max(this.windowCenterYMin, Math.min(this.windowCenterYMax, Math.round(this.dragStartCenterY + dy)));
+    this.cdr.detectChanges();
+  }
+
+  private onWindowDragEnd(_event: MouseEvent): void {
+    this.isDraggingWindow = false;
+    document.removeEventListener('mousemove', this.boundMouseMove);
+    document.removeEventListener('mouseup',   this.boundMouseUp);
+  }
 
   // ─── UI helpers ───────────────────────────────────────────────
   onActionChange(): void {}
 
   onFtOrigModeChange(): void {
-    this.ftOrigSrc = this.ftOrigBlobs[this.ftOrigMode] ?? null;
+    this.ftOrigSrc = this.ftOrigBlobs[this.ftKey(this.ftOrigMode, this.ftOrigShifted)] ?? null;
   }
 
   onFtResultModeChange(): void {
-    this.ftResultSrc = this.ftResultBlobs[this.ftResultMode] ?? null;
+    this.ftResultSrc = this.ftResultBlobs[this.ftKey(this.ftResultMode, this.ftResultShifted)] ?? null;
   }
 
   onSpatialResultModeChange(): void {
-  this.resultSrc = this.spatialResultBlobs[this.spatialResultMode] ?? null;
-}
+    this.resultSrc = this.spatialResultBlobs[this.spatialResultMode] ?? null;
+  }
+
+  onFtOrigShiftedToggle(shifted: boolean): void {
+    this.ftOrigShifted = shifted;
+    this.onFtOrigModeChange();
+  }
+
+  onFtResultShiftedToggle(shifted: boolean): void {
+    this.ftResultShifted = shifted;
+    this.onFtResultModeChange();
+  }
+
+  private ftKey(mode: string, shifted: boolean): string {
+    return shifted ? mode : `unshifted_${mode}`;
+  }
 
   // ─── Image loading ────────────────────────────────────────────
   browseImage(): void {
@@ -109,6 +236,13 @@ export class FtEmphasizerComponent {
       if (!file) return;
       this.originalFile   = file;
       this.originalSrc    = await this.fileToDataURL(file);
+
+      // Read natural dimensions before anything else
+      await this.readImageDimensions(this.originalSrc);
+      // Reset center to 0,0 when a new image loads
+      this.params.windowCenterX = 0;
+      this.params.windowCenterY = 0;
+
       this.originalLoaded = true;
       this.resultReady    = false;
       this.ftOrigBlobs    = {};
@@ -117,6 +251,21 @@ export class FtEmphasizerComponent {
       this.cdr.detectChanges();
     };
     input.click();
+  }
+
+  private readImageDimensions(src: string): Promise<void> {
+    return new Promise(res => {
+      const img = new Image();
+      img.onload = () => {
+        this.imageNaturalW = img.naturalWidth;
+        this.imageNaturalH = img.naturalHeight;
+        // Also clamp window size to image dimensions
+        this.params.windowW = Math.min(this.params.windowW, this.imageNaturalW);
+        this.params.windowH = Math.min(this.params.windowH, this.imageNaturalH);
+        res();
+      };
+      img.src = src;
+    });
   }
 
   private fileToDataURL(file: File): Promise<string> {
@@ -144,6 +293,10 @@ export class FtEmphasizerComponent {
         phase:     parts['phase'],
         real:      parts['real'],
         imaginary: parts['imaginary'],
+        unshifted_magnitude:  parts['unshifted_magnitude'],
+        unshifted_phase:      parts['unshifted_phase'],
+        unshifted_real:       parts['unshifted_real'],
+        unshifted_imaginary:  parts['unshifted_imaginary'],
       };
       this.ftOrigSrc = this.ftOrigBlobs[this.ftOrigMode];
       this.cdr.detectChanges();
@@ -166,21 +319,17 @@ export class FtEmphasizerComponent {
   }
 
   // ─── SPATIAL PIPELINE ─────────────────────────────────────────
-  // 1. Call the spatial operation endpoint with the original file.
-  // 2. Display the result image in the spatial output port.
-  // 3. Re-fetch the blob, convert to File, send to /fft to populate FT output port.
   private async applyOnSpatial(): Promise<void> {
     if (!this.originalFile) return;
     this.loading = true;
     this.resultReady = false;
     try {
-
       const spatialBlobUrl = await this.callSpatialOperation(this.originalFile);
       if (this._pendingComplexBlobs) {
         this.spatialResultBlobs = this._pendingComplexBlobs;
         this._pendingComplexBlobs = null;
         this.resultIsComplex = true;
-        this.spatialResultMode = 'magnitude'; // default to magnitude for complex
+        this.spatialResultMode = 'magnitude';
       } else {
         this.spatialResultBlobs = { image: spatialBlobUrl };
         this.resultIsComplex = false;
@@ -188,10 +337,17 @@ export class FtEmphasizerComponent {
       }
       this.resultSrc = this.spatialResultBlobs[this.spatialResultMode] ?? spatialBlobUrl;
 
-      // FT viewport always gets the actual FFT of the magnitude result
-      const n = Math.max(1, this.params.chainFT);
-      this.ftResultBlobs = await this.callFftOnBlobUrl(spatialBlobUrl, 'A', n);
-      this.ftResultSrc   = this.ftResultBlobs[this.ftResultMode];
+      // Always compute at least 1 FT of the result (the base pass).
+      // chainFT is the number of *extra* passes on top of that, so total = 1 + chainFT.
+      const totalFTPasses = 1 + this.params.chainFT;
+      this.ftResultBlobs = await this.callFftOnBlobUrl(spatialBlobUrl, 'A', totalFTPasses);
+      if (this.ftResultBlobs['spatial_passthrough']) {
+        // Even total passes → backend returned a spatial image (FT^2=flip, FT^4=identity…)
+        this.ftResultSrc  = this.ftResultBlobs['spatial_passthrough'];
+        this.ftResultMode = 'magnitude';
+      } else {
+        this.ftResultSrc = this.ftResultBlobs[this.ftResultMode];
+      }
 
       this.resultReady = true;
       this.cdr.detectChanges();
@@ -204,8 +360,6 @@ export class FtEmphasizerComponent {
   }
 
   // ─── FREQUENCY PIPELINE ───────────────────────────────────────
-  // Sends the original image file to /fft_then_operate.
-  // Backend: FFTs → applies operation → IFFTs → returns spatial JPEG + 4 FT JPEGs.
   private async applyOnFrequency(): Promise<void> {
     if (!this.originalFile) return;
     this.loading = true;
@@ -224,6 +378,10 @@ export class FtEmphasizerComponent {
         phase:     parts['phase'],
         real:      parts['real'],
         imaginary: parts['imaginary'],
+        unshifted_magnitude: parts['unshifted_magnitude'],
+        unshifted_phase:     parts['unshifted_phase'],
+        unshifted_real:      parts['unshifted_real'],
+        unshifted_imaginary: parts['unshifted_imaginary'],
       };
       this.ftResultSrc = this.ftResultBlobs[this.ftResultMode];
 
@@ -301,7 +459,6 @@ export class FtEmphasizerComponent {
     const res = await fetch(`${BASE}/multiplybycomplexexponential`, { method: 'POST', body: form });
     if (!res.ok) throw new Error(`multiplybycomplexexponential failed: ${res.status}`);
     const parts = await this.parseMultipart(res);
-    // Stash all 4 display components so applyOnSpatial can pick them up
     this._pendingComplexBlobs = {
       magnitude: parts['magnitude'],
       phase:     parts['phase'],
@@ -312,12 +469,24 @@ export class FtEmphasizerComponent {
   }
 
   private async opWindow(file: File): Promise<string> {
-    return this.postAndGetImage(`${BASE}/multiplybywindow`, this.buildForm(file, {
-      window_type: this.params.windowType,
-      ...(this.params.windowType === 'gaussian'
-        ? { sigma_x: this.params.sigma, sigma_y: this.params.sigma }
-        : {}),
-    }));
+    // Backend uses absolute pixel coords (top-left origin):
+    //   start_x = center_x - window_width//2  must be >= 0
+    // Frontend stores an offset from image center, so convert:
+    //   abs_center = imageDim/2 + offset
+    const absCenterX = Math.round(this.imageNaturalW / 2 + this.params.windowCenterX);
+    const absCenterY = Math.round(this.imageNaturalH / 2 + this.params.windowCenterY);
+    const fields: Record<string, string | number | boolean> = {
+      window_type:   this.params.windowType,
+      window_width:  this.params.windowW,
+      window_height: this.params.windowH,
+      center_x:      absCenterX,
+      center_y:      absCenterY,
+    };
+    if (this.params.windowType === 'gaussian') {
+      fields['sigma_x'] = this.params.sigma;
+      fields['sigma_y'] = this.params.sigma;
+    }
+    return this.postAndGetImage(`${BASE}/multiplybywindow`, this.buildForm(file, fields));
   }
 
   private async opDiff(file: File): Promise<string> {
@@ -337,7 +506,6 @@ export class FtEmphasizerComponent {
   }
 
   // ─── FFT ON A BLOB URL ────────────────────────────────────────
-  // Re-fetches the local blob, wraps it as a File, sends to /fft.
   private async callFftOnBlobUrl(
     blobUrl: string,
     scenario: 'A' | 'B' | 'C',
@@ -350,12 +518,28 @@ export class FtEmphasizerComponent {
     form.append('image', file);
     const res = await fetch(`${BASE}/fft?n=${n}`, { method: 'POST', body: form });
     if (!res.ok) throw new Error(`FFT on result failed: ${res.status}`);
+
+    const ct = res.headers.get('Content-Type') ?? '';
+
+    // Even number of FT passes returns a spatial image (FT^2 = flip, FT^4 = identity).
+    // Odd passes return a multipart frequency spectrum.
+    if (ct.startsWith('image/')) {
+      const spatialUrl = URL.createObjectURL(await res.blob());
+      // Surface it as the magnitude slot so the FT result panel shows something meaningful.
+      // The caller can check whether the keys are populated to decide what label to show.
+      return { spatial_passthrough: spatialUrl };
+    }
+
     const parts = await this.parseMultipart(res);
     return {
       magnitude: parts['magnitude'],
       phase:     parts['phase'],
       real:      parts['real'],
       imaginary: parts['imaginary'],
+      unshifted_magnitude: parts['unshifted_magnitude'],
+      unshifted_phase:     parts['unshifted_phase'],
+      unshifted_real:      parts['unshifted_real'],
+      unshifted_imaginary: parts['unshifted_imaginary'],
     };
   }
 
@@ -387,6 +571,10 @@ export class FtEmphasizerComponent {
     form.append('freq_u',         String(this.params.freqU));
     form.append('freq_v',         String(this.params.freqV));
     form.append('window_type',    this.params.windowType);
+    form.append('window_width',   String(this.params.windowW));
+    form.append('window_height',  String(this.params.windowH));
+    form.append('center_x',       String(Math.round(this.imageNaturalW / 2 + this.params.windowCenterX)));
+    form.append('center_y',       String(Math.round(this.imageNaturalH / 2 + this.params.windowCenterY)));
     form.append('sigma_x',        String(this.params.sigma));
     form.append('sigma_y',        String(this.params.sigma));
     form.append('symmetry_type',  this.selectedAction === 'even' ? 'even' : 'odd');
@@ -399,7 +587,6 @@ export class FtEmphasizerComponent {
 
   // ─── FETCH HELPERS ────────────────────────────────────────────
 
-  /** POST and return a blob URL. Handles plain JPEG and multipart (returns magnitude). */
   private async postAndGetImage(url: string, form: FormData): Promise<string> {
     const res = await fetch(url, { method: 'POST', body: form });
     if (!res.ok) throw new Error(`${url} failed: ${res.status}`);
@@ -412,7 +599,6 @@ export class FtEmphasizerComponent {
   }
 
   // ─── MULTIPART PARSER ─────────────────────────────────────────
-  // Only extracts image/* parts — JSON metadata is intentionally ignored.
 
   private async parseMultipart(res: Response): Promise<Record<string, string>> {
     const ct       = res.headers.get('Content-Type') ?? '';

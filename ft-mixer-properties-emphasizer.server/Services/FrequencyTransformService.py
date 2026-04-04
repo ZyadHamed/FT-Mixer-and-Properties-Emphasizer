@@ -6,49 +6,58 @@ def prepare_fft_for_display(F):
     """
     Takes a raw 2D FFT, centers the DC component, extracts all 4 components,
     and normalizes all of them to a 0.0 - 1.0 range for frontend visualization.
+    
+    Returns both shifted (DC-centered) and unshifted versions of all display images.
     """
-    # 1. Shift the zero-frequency (DC) component to the center of the array
+
+    def _process_components(F_arr):
+        """Extract and normalize all 4 components from a (possibly shifted) FFT array."""
+        magnitude_spectrum = np.abs(F_arr)
+        raw_phase         = np.angle(F_arr)
+        raw_real          = np.real(F_arr)
+        raw_imaginary     = np.imag(F_arr)
+
+        scale = 100000.0
+
+        # MAGNITUDE — log scale + max normalization
+        mag_log = np.log(1 + (magnitude_spectrum * scale))
+        mag_max = np.max(mag_log)
+        display_magnitude = mag_log / mag_max if mag_max > 0 else mag_log
+
+        # PHASE — [-pi, pi] → [0, 1]
+        display_phase = (raw_phase + np.pi) / (2 * np.pi)
+
+        # REAL — signed log + min-max normalization
+        real_log = np.sign(raw_real) * np.log(1 + np.abs(raw_real * scale))
+        real_min, real_max = np.min(real_log), np.max(real_log)
+        display_real = (
+            (real_log - real_min) / (real_max - real_min)
+            if real_max > real_min else real_log
+        )
+
+        # IMAGINARY — signed log + min-max normalization
+        imag_log = np.sign(raw_imaginary) * np.log(1 + np.abs(raw_imaginary * scale))
+        imag_min, imag_max = np.min(imag_log), np.max(imag_log)
+        display_imaginary = (
+            (imag_log - imag_min) / (imag_max - imag_min)
+            if imag_max > imag_min else imag_log
+        )
+
+        return display_magnitude, display_phase, display_real, display_imaginary
+
+    # Shifted (DC-centered) versions
     F_shifted = np.fft.fftshift(F)
-    
-    # 2. Extract the raw components
-    magnitude_spectrum = np.abs(F_shifted)
-    raw_phase = np.angle(F_shifted)               
-    raw_real = np.real(F_shifted)
-    raw_imaginary = np.imag(F_shifted)
+    shifted_mag, shifted_phase, shifted_real, shifted_imag = _process_components(F_shifted)
 
-    scale = 100000.0
-    
-    # 3. Process MAGNITUDE (Log scale and max normalization)
-    mag_log = np.log(1 + (magnitude_spectrum * scale))
-    mag_max = np.max(mag_log)
-    display_magnitude = mag_log / mag_max if mag_max > 0 else mag_log
-    
-    # 4. Process PHASE (Normalize from [-pi, pi] to [0.0, 1.0])
-    display_phase = (raw_phase + np.pi) / (2 * np.pi)
-    
-    # 5. Process REAL and IMAGINARY (Signed Log scale + Min-Max normalization)
-    # The sign() function keeps negatives negative and positives positive
-    real_log = np.sign(raw_real) * np.log(1 + np.abs(raw_real * scale))
-    imag_log = np.sign(raw_imaginary) * np.log(1 + np.abs(raw_imaginary * scale))
-    
-    # Min-Max normalization maps the lowest negative value to 0.0, 
-    # the highest positive value to 1.0, and mathematical 0 naturally sits around 0.5 (gray).
-    real_min, real_max = np.min(real_log), np.max(real_log)
-    if real_max > real_min:
-        display_real = (real_log - real_min) / (real_max - real_min)
-    else:
-        display_real = real_log
-        
-    imag_min, imag_max = np.min(imag_log), np.max(imag_log)
-    if imag_max > imag_min:
-        display_imaginary = (imag_log - imag_min) / (imag_max - imag_min)
-    else:
-        display_imaginary = imag_log
+    # Unshifted versions — same processing pipeline, raw FFT layout
+    unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag = _process_components(F)
 
-    # Return the raw F for future math, plus the 4 display-ready images
-    return F, display_magnitude, display_phase, display_real, display_imaginary
+    return (
+        F,                                                    # raw FFT for future math
+        shifted_mag, shifted_phase, shifted_real, shifted_imag,       # DC-centered
+        unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag,  # raw layout
+    )
 
-import numpy as np
 
 def prepare_complex_spatial_for_display(img_complex):
     """

@@ -139,34 +139,56 @@
             <option value="hanning">Hanning</option>
           </select>
         </div>
+
         @if (params.windowType === 'gaussian') {
           <div class="ctrl-group">
             <label class="ctrl-label">σ Sigma <span class="val">{{ params.sigma }}</span></label>
             <input type="range" class="styled-slider" min="1" max="200" [(ngModel)]="params.sigma">
           </div>
         }
+
         <div class="ctrl-group">
           <label class="ctrl-label">Width <span class="val">{{ params.windowW }}px</span></label>
-          <input type="range" class="styled-slider" min="10" max="500" [(ngModel)]="params.windowW">
+          <input type="range" class="styled-slider"
+                 min="10" [max]="imageNaturalW"
+                 [(ngModel)]="params.windowW"
+                 (ngModelChange)="clampWindowCenter()">
         </div>
         <div class="ctrl-group">
           <label class="ctrl-label">Height <span class="val">{{ params.windowH }}px</span></label>
-          <input type="range" class="styled-slider" min="10" max="500" [(ngModel)]="params.windowH">
+          <input type="range" class="styled-slider"
+                 min="10" [max]="imageNaturalH"
+                 [(ngModel)]="params.windowH"
+                 (ngModelChange)="clampWindowCenter()">
         </div>
-      }
 
-      @if (selectedAction === 'ft_repeat') {
+        <!-- Center X — range adjusts dynamically based on window width -->
         <div class="ctrl-group">
-          <label class="ctrl-label">Repeat Count <span class="val">{{ params.ftRepeat }}×</span></label>
-          <input type="range" class="styled-slider" min="1" max="8" step="1" [(ngModel)]="params.ftRepeat">
+          <label class="ctrl-label">
+            Center X <span class="val">{{ params.windowCenterX }}px</span>
+          </label>
+          <input type="range" class="styled-slider"
+                 [min]="windowCenterXMin" [max]="windowCenterXMax" step="1"
+                 [(ngModel)]="params.windowCenterX"
+                 [disabled]="windowCenterXMin >= windowCenterXMax">
         </div>
+
+        <!-- Center Y — range adjusts dynamically based on window height -->
         <div class="ctrl-group">
-          <label class="ctrl-label">Scenario Type</label>
-          <select class="styled-select" [(ngModel)]="params.ftScenarioType">
-            <option value="A">A</option>
-            <option value="B">B</option>
-            <option value="C">C</option>
-          </select>
+          <label class="ctrl-label">
+            Center Y <span class="val">{{ params.windowCenterY }}px</span>
+          </label>
+          <input type="range" class="styled-slider"
+                 [min]="windowCenterYMin" [max]="windowCenterYMax" step="1"
+                 [(ngModel)]="params.windowCenterY"
+                 [disabled]="windowCenterYMin >= windowCenterYMax">
+        </div>
+
+        <div class="no-params-hint window-drag-hint">
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          Drag the rectangle on the image to reposition.
         </div>
       }
 
@@ -224,7 +246,8 @@
               <option value="image">Image</option>
             </select>
           </div>
-          <div class="vp-canvas" (dblclick)="browseImage()">
+          <!-- #spatialOrigCanvas lets the TS grab the element for drag scale calculations -->
+          <div class="vp-canvas" #spatialOrigCanvas (dblclick)="browseImage()">
             @if (!originalLoaded) {
               <div class="vp-empty">
                 <svg viewBox="0 0 24 24" fill="none">
@@ -235,6 +258,15 @@
               </div>
             } @else {
               <img [src]="originalSrc" class="vp-img">
+              <!-- Window overlay — shown when action=window & domain=spatial -->
+              @if (showWindowOnSpatial) {
+                <div class="window-overlay"
+                     [ngStyle]="windowOverlayStyle"
+                     [class.dragging]="isDraggingWindow"
+                     (mousedown)="onWindowDragStart($event, spatialOrigCanvas)">
+                  <span class="window-overlay-label">{{ params.windowW }}×{{ params.windowH }}</span>
+                </div>
+              }
             }
           </div>
         </div>
@@ -287,8 +319,13 @@
               <option value="real">Real</option>
               <option value="imaginary">Imaginary</option>
             </select>
+            <div class="toggle-row">
+              <button class="toggle-btn" [class.active]="ftOrigShifted"  (click)="onFtOrigShiftedToggle(true)">Shifted</button>
+              <button class="toggle-btn" [class.active]="!ftOrigShifted" (click)="onFtOrigShiftedToggle(false)">Unshifted</button>
+            </div>
           </div>
-          <div class="vp-canvas ft-canvas">
+          <!-- #ftOrigCanvas lets the TS grab the element for drag scale calculations -->
+          <div class="vp-canvas ft-canvas" #ftOrigCanvas>
             @if (!originalLoaded) {
               <div class="vp-empty">
                 <svg viewBox="0 0 24 24" fill="none">
@@ -298,6 +335,15 @@
               </div>
             } @else {
               <img [src]="ftOrigSrc" class="vp-img">
+              <!-- Window overlay — shown when action=window & domain=frequency -->
+              @if (showWindowOnFt) {
+                <div class="window-overlay"
+                     [ngStyle]="windowOverlayStyle"
+                     [class.dragging]="isDraggingWindow"
+                     (mousedown)="onWindowDragStart($event, ftOrigCanvas)">
+                  <span class="window-overlay-label">{{ params.windowW }}×{{ params.windowH }}</span>
+                </div>
+              }
             }
           </div>
         </div>
@@ -311,6 +357,10 @@
               <option value="real">Real</option>
               <option value="imaginary">Imaginary</option>
             </select>
+              <div class="toggle-row">
+                <button class="toggle-btn" [class.active]="ftResultShifted"  (click)="onFtResultShiftedToggle(true)">Shifted</button>
+                <button class="toggle-btn" [class.active]="!ftResultShifted" (click)="onFtResultShiftedToggle(false)">Unshifted</button>
+              </div>
           </div>
           <div class="vp-canvas ft-canvas result-canvas" [class.has-result]="resultReady">
             @if (!resultReady) {

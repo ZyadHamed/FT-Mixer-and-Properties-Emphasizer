@@ -411,3 +411,67 @@
   pointer-events: none;
   display: block;
 }
+
+
+/* ─── Add these rules to ft-emphasizer.component.css ─────────────────────── */
+
+/* The vp-canvas must be position:relative so the overlay can be absolute */
+.vp-canvas {
+  position: relative;
+  overflow: hidden; /* keeps the overlay clipped to the canvas boundary */
+}
+
+/* Draggable window rectangle overlay */
+.window-overlay {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 200, 60, 0.9);
+  background: rgba(255, 200, 60, 0.12);
+  cursor: grab;
+  border-radius: 2px;
+  /* Prevent text selection while dragging */
+  user-select: none;
+  /* Smooth resize when sliders change */
+  transition: left 0.05s, top 0.05s, width 0.05s, height 0.05s;
+  /* Sit above the image */
+  z-index: 10;
+}
+
+.window-overlay:hover {
+  background: rgba(255, 200, 60, 0.22);
+  border-color: rgba(255, 220, 80, 1);
+}
+
+.window-overlay.dragging {
+  cursor: grabbing;
+  background: rgba(255, 200, 60, 0.28);
+  transition: none; /* no lag while actively dragging */
+}
+
+/* Pixel dimensions label inside the rectangle */
+.window-overlay-label {
+  position: absolute;
+  bottom: 3px;
+  right: 5px;
+  font-size: 9px;
+  font-family: monospace;
+  color: rgba(255, 220, 80, 0.95);
+  pointer-events: none;
+  white-space: nowrap;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+
+/* Hint shown below center sliders */
+.window-drag-hint {
+  margin-top: 2px;
+  font-size: 10px;
+  color: rgba(255, 200, 60, 0.6);
+  gap: 5px;
+}
+
+.window-drag-hint svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: rgba(255, 200, 60, 0.6);
+}
