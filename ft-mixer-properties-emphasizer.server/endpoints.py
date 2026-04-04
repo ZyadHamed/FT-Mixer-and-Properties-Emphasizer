@@ -1,4 +1,4 @@
-import os
+﻿import os
 import base64
 import numpy as np
 from pydantic import BaseModel
@@ -23,6 +23,8 @@ from Services.FrequencyTransformService import (
     prepare_complex_spatial_for_display, arr_to_bytes
 )
 
+from Services.MixerService import MixerService
+
 app = FastAPI()
 origins = ["*"]
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -34,7 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+mixer_service = MixerService()
 
 # complex_input: JSON string: {real, imag, shape}
 async def parse_image_input(image: Optional[UploadFile],complex_input: Optional[str]) -> np.ndarray:
@@ -427,3 +429,123 @@ async def FftThenOperateEndpoint(
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",
     )
+
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Part A – FT Mixer  (new endpoints)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/image/upload")
+async def UploadImageEndpoint(
+    image:           UploadFile = File(...),
+    unify_policy:    str  = Form("smallest"),
+    keep_aspect_ratio: bool = Form(True),
+):
+    """
+    Accepts a single image.
+    Returns original + all 4 FT component images as base64 JPEGs.
+    """
+    image_bytes = await image.read()
+
+    # Convert to grayscale numpy array (0–255 uint8)
+    pil_img = Image.open(io.BytesIO(image_bytes)).convert("L")
+    arr = np.array(pil_img, dtype=np.float32) / 255.0   # 0.0–1.0
+
+    # Compute FFT components
+    fft        = np.fft.fft2(arr)
+    fft_shift  = np.fft.fftshift(fft)
+
+    _, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(fft_shift)
+
+    def to_b64(a: np.ndarray) -> str:
+        uint8 = np.clip(a * 255, 0, 255).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(uint8).save(buf, format="JPEG", quality=95)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # Original image as base64
+    orig_uint8 = np.clip(arr * 255, 0, 255).astype(np.uint8)
+    orig_buf = io.BytesIO()
+    Image.fromarray(orig_uint8).save(orig_buf, format="JPEG", quality=95)
+    orig_b64 = base64.b64encode(orig_buf.getvalue()).decode("utf-8")
+
+    return JSONResponse({
+        "original":  orig_b64,
+        "magnitude": to_b64(mag_disp),
+        "phase":     to_b64(phase_disp),
+        "real":      to_b64(real_disp),
+        "imaginary": to_b64(imag_disp),
+    })
+
+
+@app.post("/api/mixer/run")
+async def RunMixEndpoint(
+    image_0: Optional[UploadFile] = File(None),
+    image_1: Optional[UploadFile] = File(None),
+    image_2: Optional[UploadFile] = File(None),
+    image_3: Optional[UploadFile] = File(None),
+    mag_weight_0:   float = Form(1.0),
+    mag_weight_1:   float = Form(1.0),
+    mag_weight_2:   float = Form(1.0),
+    mag_weight_3:   float = Form(1.0),
+    phase_weight_0: float = Form(1.0),
+    phase_weight_1: float = Form(1.0),
+    phase_weight_2: float = Form(1.0),
+    phase_weight_3: float = Form(1.0),
+    component_pair:    str   = Form("mag-phase"),
+    region_type:       str   = Form("inner"),
+    region_size:       float = Form(40.0),
+    unify_policy:      str   = Form("smallest"),
+    keep_aspect_ratio: bool  = Form(True),
+):
+    uploaded = [
+        (image_0, mag_weight_0, phase_weight_0),
+        (image_1, mag_weight_1, phase_weight_1),
+        (image_2, mag_weight_2, phase_weight_2),
+        (image_3, mag_weight_3, phase_weight_3),
+    ]
+ 
+    images = []
+    for upload_file, mw, pw in uploaded:
+        if upload_file is not None:
+            images.append({
+                "bytes":        await upload_file.read(),
+                "mag_weight":   mw,
+                "phase_weight": pw,
+            })
+ 
+    if not images:
+        raise HTTPException(status_code=400, detail="No images provided.")
+ 
+    # mix() returns (result_b64, spatial_arr)
+    result_b64, spatial_arr = mixer_service.mix(
+        images=images,
+        component_pair=component_pair,
+        region_type=region_type,
+        region_size=region_size,
+        unify_policy=unify_policy,
+        keep_aspect_ratio=keep_aspect_ratio,
+    )
+ 
+    # Compute FT components of the mixed result
+    arr_norm  = spatial_arr.astype(np.float32) / 255.0
+    fft_shift = np.fft.fftshift(np.fft.fft2(arr_norm))
+    _, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(fft_shift)
+ 
+    def to_b64(a: np.ndarray) -> str:
+        uint8 = np.clip(a * 255, 0, 255).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(uint8).save(buf, format="JPEG", quality=95)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+ 
+    return JSONResponse({
+        "result_image": result_b64,
+        "magnitude":    to_b64(mag_disp),
+        "phase":        to_b64(phase_disp),
+        "real":         to_b64(real_disp),
+        "imaginary":    to_b64(imag_disp),
+    })
+ 

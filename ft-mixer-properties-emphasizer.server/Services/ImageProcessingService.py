@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 from scipy.ndimage import zoom, rotate, convolve
 
 def ShiftImage(image, shift_x=0, shift_y=0, cyclic=False, flip=True):
@@ -202,3 +202,77 @@ def MultiplyByWindow(image, window_width, window_height, center_x, center_y, win
     
     # Return the multiplied image and the padded window
     return img_array * padded_window
+
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Part A helpers  (new — used by MixerService)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compute_target_size(
+    sizes: list[tuple[int, int]],
+    policy: str,
+) -> tuple[int, int]:
+    """
+    Compute the unified target (width, height) from a list of image sizes.
+
+    policy:
+      'smallest' → pick the size with the fewest total pixels
+      'largest'  → pick the size with the most total pixels
+      'fixed'    → use the first image's size as the reference
+    """
+    if not sizes:
+        return (256, 256)
+
+    if policy == "smallest":
+        return min(sizes, key=lambda s: s[0] * s[1])
+    elif policy == "largest":
+        return max(sizes, key=lambda s: s[0] * s[1])
+    else:                          # 'fixed'
+        return sizes[0]
+
+
+def load_and_unify_images(
+    images_bytes: list[bytes],
+    unify_policy: str,
+    keep_aspect_ratio: bool,
+) -> list[np.ndarray]:
+    """
+    Decode raw image bytes, convert to grayscale, resize to a unified size.
+    Returns a list of float64 numpy arrays in the range 0–255.
+    """
+    pil_images = [
+        Image.open(io.BytesIO(b)).convert("L")
+        for b in images_bytes
+    ]
+
+    target_size = compute_target_size(
+        [img.size for img in pil_images], unify_policy
+    )
+
+    resample = Image.LANCZOS
+    result   = []
+
+    for img in pil_images:
+        if keep_aspect_ratio:
+            img.thumbnail(target_size, resample)
+            # Pad to exact target size (center the image on a black canvas)
+            canvas = Image.new("L", target_size, 0)
+            offset = (
+                (target_size[0] - img.width)  // 2,
+                (target_size[1] - img.height) // 2,
+            )
+            canvas.paste(img, offset)
+            result.append(np.array(canvas, dtype=np.float64))
+        else:
+            result.append(
+                np.array(img.resize(target_size, resample), dtype=np.float64)
+            )
+
+    return result
+
+
+
+
