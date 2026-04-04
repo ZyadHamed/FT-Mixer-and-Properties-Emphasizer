@@ -527,7 +527,7 @@ async def RunMixEndpoint(
         images=images,
         component_pair=component_pair,
         region_type=region_type,
-        region_size=region_size,
+        region_size=region_size,    
         unify_policy=unify_policy,
         keep_aspect_ratio=keep_aspect_ratio,
     )
