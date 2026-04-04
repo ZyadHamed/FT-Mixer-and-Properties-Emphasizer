@@ -1,5 +1,7 @@
 ﻿import numpy as np
 from scipy.ndimage import zoom, rotate, convolve
+from PIL import Image
+import io
 
 def ShiftImage(image, shift_x=0, shift_y=0, cyclic=False, flip=True):
     img_array = np.asarray(image)

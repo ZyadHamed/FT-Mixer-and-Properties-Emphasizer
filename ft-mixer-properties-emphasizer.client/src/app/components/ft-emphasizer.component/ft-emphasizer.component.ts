@@ -72,6 +72,9 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
   ftOrigShifted  = true;
   ftResultShifted = true;
 
+  loadingProgress = 0;
+
+
   // Natural image dimensions (pixels) — populated once the image loads
   imageNaturalW = 512;
   imageNaturalH = 512;
@@ -226,6 +229,35 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
     return shifted ? mode : `unshifted_${mode}`;
   }
 
+  private fileToGrayscaleDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        data[i] = data[i + 1] = data[i + 2] = gray;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
+  return fetch(dataURL)
+    .then(r => r.blob())
+    .then(blob => new File([blob], filename, { type: 'image/png' }));
+}
+
   // ─── Image loading ────────────────────────────────────────────
   browseImage(): void {
     const input = document.createElement('input');
@@ -235,7 +267,8 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
       this.originalFile   = file;
-      this.originalSrc    = await this.fileToDataURL(file);
+      this.originalSrc    = await this.fileToGrayscaleDataURL(file);
+      this.originalFile = await this.dataURLtoFile(this.originalSrc, file.name);
 
       // Read natural dimensions before anything else
       await this.readImageDimensions(this.originalSrc);
@@ -325,6 +358,7 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
     this.resultReady = false;
     try {
       const spatialBlobUrl = await this.callSpatialOperation(this.originalFile);
+      this.loadingProgress = 50;   // step 1 of 2 done
       if (this._pendingComplexBlobs) {
         this.spatialResultBlobs = this._pendingComplexBlobs;
         this._pendingComplexBlobs = null;
@@ -341,13 +375,14 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
       // chainFT is the number of *extra* passes on top of that, so total = 1 + chainFT.
       const totalFTPasses = 1 + this.params.chainFT;
       this.ftResultBlobs = await this.callFftOnBlobUrl(spatialBlobUrl, 'A', totalFTPasses);
+      this.loadingProgress = 100;  // step 2 of 2 done
+      // If even FT passes produced a spatial image, show IT as the spatial result
       if (this.ftResultBlobs['spatial_passthrough']) {
-        // Even total passes → backend returned a spatial image (FT^2=flip, FT^4=identity…)
-        this.ftResultSrc  = this.ftResultBlobs['spatial_passthrough'];
-        this.ftResultMode = 'magnitude';
-      } else {
-        this.ftResultSrc = this.ftResultBlobs[this.ftResultMode];
+        this.resultSrc = this.ftResultBlobs['spatial_passthrough'];
+        this.spatialResultBlobs['image'] = this.ftResultBlobs['spatial_passthrough'];
       }
+
+      this.ftResultSrc = this.ftResultBlobs[this.ftKey(this.ftResultMode, this.ftResultShifted)];
 
       this.resultReady = true;
       this.cdr.detectChanges();
@@ -368,8 +403,10 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
       const form = this.buildActionForm(this.originalFile);
       const res  = await fetch(`${BASE}/fft_then_operate`, { method: 'POST', body: form });
       if (!res.ok) throw new Error(`fft_then_operate failed: ${res.status}`);
+      this.loadingProgress = 80;   // network done, parsing remains
 
       const parts = await this.parseMultipart(res);
+      this.loadingProgress = 100;
       this.resultSrc     = parts['spatial'];
       this.resultIsComplex = false;
       this.spatialResultMode = 'image';
@@ -505,43 +542,60 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
     return parts['magnitude'];
   }
 
-  // ─── FFT ON A BLOB URL ────────────────────────────────────────
-  private async callFftOnBlobUrl(
-    blobUrl: string,
-    scenario: 'A' | 'B' | 'C',
-    n: number
-  ): Promise<Record<string, string>> {
-    const blob = await fetch(blobUrl).then(r => r.blob());
-    const file = new File([blob], 'result.jpg', { type: 'image/jpeg' });
-    const form = new FormData();
-    form.append('scenario_type', scenario);
-    form.append('image', file);
-    const res = await fetch(`${BASE}/fft?n=${n}`, { method: 'POST', body: form });
-    if (!res.ok) throw new Error(`FFT on result failed: ${res.status}`);
+private async callFftOnBlobUrl(
+  blobUrl: string,
+  scenario: 'A' | 'B' | 'C',
+  n: number
+): Promise<Record<string, string>> {
+  const blob = await fetch(blobUrl).then(r => r.blob());
+  const file = new File([blob], 'result.jpg', { type: 'image/jpeg' });
+  const form = new FormData();
+  form.append('scenario_type', scenario);
+  form.append('image', file);
+  const res = await fetch(`${BASE}/fft?n=${n}`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`FFT on result failed: ${res.status}`);
 
-    const ct = res.headers.get('Content-Type') ?? '';
+  const ct = res.headers.get('Content-Type') ?? '';
 
-    // Even number of FT passes returns a spatial image (FT^2 = flip, FT^4 = identity).
-    // Odd passes return a multipart frequency spectrum.
-    if (ct.startsWith('image/')) {
-      const spatialUrl = URL.createObjectURL(await res.blob());
-      // Surface it as the magnitude slot so the FT result panel shows something meaningful.
-      // The caller can check whether the keys are populated to decide what label to show.
-      return { spatial_passthrough: spatialUrl };
-    }
+  if (ct.startsWith('image/')) {
+    // Even passes → backend returned a real spatial image (e.g. FT²=flip).
+    // Compute 1 FFT of IT for the frequency display panels.
+    const spatialBlob = await res.blob();
+    const spatialUrl  = URL.createObjectURL(spatialBlob);
 
-    const parts = await this.parseMultipart(res);
+    const extraFile = new File([spatialBlob], 'spatial.jpg', { type: 'image/jpeg' });
+    const extraForm = new FormData();
+    extraForm.append('scenario_type', 'A');
+    extraForm.append('image', extraFile);
+    const extraRes = await fetch(`${BASE}/fft?n=1`, { method: 'POST', body: extraForm });
+    if (!extraRes.ok) throw new Error(`Extra FFT pass failed: ${extraRes.status}`);
+
+    const parts = await this.parseMultipart(extraRes);
     return {
-      magnitude: parts['magnitude'],
-      phase:     parts['phase'],
-      real:      parts['real'],
-      imaginary: parts['imaginary'],
+      spatial_passthrough: spatialUrl,  // kept so caller can detect this case
+      magnitude:           parts['magnitude'],
+      phase:               parts['phase'],
+      real:                parts['real'],
+      imaginary:           parts['imaginary'],
       unshifted_magnitude: parts['unshifted_magnitude'],
       unshifted_phase:     parts['unshifted_phase'],
       unshifted_real:      parts['unshifted_real'],
       unshifted_imaginary: parts['unshifted_imaginary'],
     };
   }
+
+  const parts = await this.parseMultipart(res);
+  return {
+    magnitude:           parts['magnitude'],
+    phase:               parts['phase'],
+    real:                parts['real'],
+    imaginary:           parts['imaginary'],
+    unshifted_magnitude: parts['unshifted_magnitude'],
+    unshifted_phase:     parts['unshifted_phase'],
+    unshifted_real:      parts['unshifted_real'],
+    unshifted_imaginary: parts['unshifted_imaginary'],
+  };
+}
 
   // ─── FORM BUILDERS ────────────────────────────────────────────
 

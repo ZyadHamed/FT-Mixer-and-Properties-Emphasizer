@@ -25,6 +25,8 @@ from Services.FrequencyTransformService import (
 
 from Services.MixerService import MixerService
 
+#py -m uvicorn endpoints:app --reload
+
 app = FastAPI()
 origins = ["*"]
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -458,7 +460,7 @@ async def UploadImageEndpoint(
     fft        = np.fft.fft2(arr)
     fft_shift  = np.fft.fftshift(fft)
 
-    _, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(fft_shift)
+    _, mag_disp, phase_disp, real_disp, imag_disp, *_ = prepare_fft_for_display(fft_shift)
 
     def to_b64(a: np.ndarray) -> str:
         uint8 = np.clip(a * 255, 0, 255).astype(np.uint8)
@@ -533,7 +535,7 @@ async def RunMixEndpoint(
     # Compute FT components of the mixed result
     arr_norm  = spatial_arr.astype(np.float32) / 255.0
     fft_shift = np.fft.fftshift(np.fft.fft2(arr_norm))
-    _, mag_disp, phase_disp, real_disp, imag_disp = prepare_fft_for_display(fft_shift)
+    _, mag_disp, phase_disp, real_disp, imag_disp, *_ = prepare_fft_for_display(fft_shift)
  
     def to_b64(a: np.ndarray) -> str:
         uint8 = np.clip(a * 255, 0, 255).astype(np.uint8)

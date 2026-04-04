@@ -212,14 +212,17 @@
     </div>
 
     <div class="sidebar-footer">
-      <div class="status-indicator" [class.active]="loading">
-        @if (loading) {
-          <svg class="spin" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 10"/>
-          </svg>
-          Processing…
-        }
-      </div>
+      @if (loading) {
+  <div class="progress-area">
+    <div class="progress-lbl">
+      <span>Processing…</span>
+      <span class="mono">{{ loadingProgress }}%</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" [style.width.%]="loadingProgress"></div>
+    </div>
+  </div>
+}
       <button class="apply-btn" (click)="applyAction()" [disabled]="!originalLoaded || loading">
         <svg viewBox="0 0 14 14" fill="none">
           <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
