@@ -14,6 +14,8 @@ export interface EmphasizerParams {
   shiftY: number;
   cyclicShift: boolean;
   flipShift: boolean;
+  diffAxis: 'x' | 'y';
+  amplitude: number;
   scaleX: number;
   scaleY: number;
   angle: number;
@@ -53,7 +55,7 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
   domain: 'spatial' | 'frequency' = 'spatial';
 
   params: EmphasizerParams = {
-    shiftX: 0, shiftY: 0, cyclicShift: true, flipShift: false,
+    shiftX: 0, shiftY: 0, cyclicShift: true, flipShift: false, diffAxis: 'x', amplitude: 1,
     scaleX: 1, scaleY: 1,
     angle: 0, expandCanvas: true,
     mirrorAxis: 'horizontal', duplicateMode: false,
@@ -122,25 +124,58 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
     this.params.windowCenterY = Math.max(this.windowCenterYMin, Math.min(this.windowCenterYMax, this.params.windowCenterY));
   }
 
+
+private getRenderedImageRect(containerEl: HTMLDivElement): { left: number, top: number, width: number, height: number } {
+  const containerRect = containerEl.getBoundingClientRect();
+  const containerW = containerRect.width;
+  const containerH = containerRect.height;
+  const imageAspect = this.imageNaturalW / this.imageNaturalH;
+  const containerAspect = containerW / containerH;
+
+  let renderedW: number, renderedH: number;
+  if (imageAspect > containerAspect) {
+    // Image is wider — constrained by width, pillarboxed top/bottom
+    renderedW = containerW;
+    renderedH = containerW / imageAspect;
+  } else {
+    // Image is taller — constrained by height, letterboxed left/right
+    renderedH = containerH;
+    renderedW = containerH * imageAspect;
+  }
+
+  return {
+    left:   (containerW - renderedW) / 2,
+    top:    (containerH - renderedH) / 2,
+    width:  renderedW,
+    height: renderedH,
+  };
+}
+
   /**
    * Returns the overlay rectangle style (percentages relative to the vp-canvas element)
    * for the window overlay on the active input panel.
    */
   get windowOverlayStyle(): Record<string, string> {
-    const W = this.imageNaturalW;
-    const H = this.imageNaturalH;
-    const ww = Math.min(this.params.windowW, W);
-    const wh = Math.min(this.params.windowH, H);
-    // top-left corner in image pixel coords (image center = W/2, H/2)
-    const left = (W / 2 + this.params.windowCenterX - ww / 2);
-    const top  = (H / 2 + this.params.windowCenterY - wh / 2);
-    return {
-      left:   `${(left / W) * 100}%`,
-      top:    `${(top  / H) * 100}%`,
-      width:  `${(ww   / W) * 100}%`,
-      height: `${(wh   / H) * 100}%`,
-    };
-  }
+  const containerEl = (this.domain === 'spatial'
+    ? this.spatialOrigCanvasRef
+    : this.ftOrigCanvasRef)?.nativeElement;
+  if (!containerEl) return {};
+
+  const r = this.getRenderedImageRect(containerEl);
+  const W = this.imageNaturalW;
+  const H = this.imageNaturalH;
+  const ww = Math.min(this.params.windowW, W);
+  const wh = Math.min(this.params.windowH, H);
+  const left = (W / 2 + this.params.windowCenterX - ww / 2);
+  const top  = (H / 2 + this.params.windowCenterY - wh / 2);
+
+  return {
+    left:   `${r.left + (left / W) * r.width}px`,
+    top:    `${r.top  + (top  / H) * r.height}px`,
+    width:  `${(ww / W) * r.width}px`,
+    height: `${(wh / H) * r.height}px`,
+  };
+}
 
   /** True when the window overlay should be shown on the spatial-original panel. */
   get showWindowOnSpatial(): boolean {
@@ -175,8 +210,9 @@ export class FtEmphasizerComponent implements AfterViewInit, OnDestroy {
 
     // Scale: canvas display width → image pixel width
     const rect = canvasEl.getBoundingClientRect();
-    this._dragScaleX = this.imageNaturalW / rect.width;
-    this._dragScaleY = this.imageNaturalH / rect.height;
+    const r = this.getRenderedImageRect(canvasEl);
+    this._dragScaleX = this.imageNaturalW / r.width;
+    this._dragScaleY = this.imageNaturalH / r.height;
 
     document.addEventListener('mousemove', this.boundMouseMove);
     document.addEventListener('mouseup',   this.boundMouseUp);
@@ -309,37 +345,53 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
     });
   }
 
-  // ─── FFT of original (auto on load) ──────────────────────────
   private async computeFftOfOriginal(file: File): Promise<void> {
-    this.loading = true;
-    try {
-      const form = new FormData();
-      form.append('scenario_type', 'A');
-      form.append('image', file);
+  this.loading = true;
+  try {
+    const form = new FormData();
+    form.append('action',        'shift');
+    form.append('shift_x',       '0');
+    form.append('shift_y',       '0');
+    form.append('cyclic',        'true');
+    form.append('flip',          'false');
+    form.append('window_width',  '256');
+    form.append('window_height', '256');
+    form.append('center_x',      '0');
+    form.append('center_y',      '0');
+    form.append('image',         file);
 
-      const res = await fetch(`${BASE}/fft?n=1`, { method: 'POST', body: form });
-      if (!res.ok) throw new Error(`FFT failed: ${res.status}`);
+    const res = await fetch(`${BASE}/operate_then_fft`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`FFT failed: ${res.status}`);
 
-      const parts = await this.parseMultipart(res);
-      this.ftOrigBlobs = {
-        magnitude: parts['magnitude'],
-        phase:     parts['phase'],
-        real:      parts['real'],
-        imaginary: parts['imaginary'],
-        unshifted_magnitude:  parts['unshifted_magnitude'],
-        unshifted_phase:      parts['unshifted_phase'],
-        unshifted_real:       parts['unshifted_real'],
-        unshifted_imaginary:  parts['unshifted_imaginary'],
-      };
-      this.ftOrigSrc = this.ftOrigBlobs[this.ftOrigMode];
-      this.cdr.detectChanges();
-    } catch (err) {
-      console.error('computeFftOfOriginal error:', err);
-    } finally {
-      this.loading = false;
-      this.cdr.detectChanges();
-    }
+    const parts = await this.parseMultipart(res);
+    this.ftOrigBlobs = {
+      magnitude:            parts['magnitude'],
+      phase:                parts['phase'],
+      real:                 parts['real'],
+      imaginary:            parts['imaginary'],
+      unshifted_magnitude:  parts['unshifted_magnitude'],
+      unshifted_phase:      parts['unshifted_phase'],
+      unshifted_real:       parts['unshifted_real'],
+      unshifted_imaginary:  parts['unshifted_imaginary'],
+    };
+    this.ftOrigSrc = this.ftOrigBlobs[this.ftOrigMode];
+    this.cdr.detectChanges();
+  } catch (err) {
+    console.error('computeFftOfOriginal error:', err);
+  } finally {
+    this.loading = false;
+    this.cdr.detectChanges();
   }
+}
+
+onChainFTChange(value: any): void {
+  const parsed = parseInt(value, 10);
+  this.params.chainFT = null as any;   // force Angular to detect a change
+  setTimeout(() => {
+    this.params.chainFT = (!isNaN(parsed) && parsed > 0) ? parsed : 0;
+    this.cdr.detectChanges();
+  });
+}
 
   // ─── Main apply ───────────────────────────────────────────────
   async applyAction(): Promise<void> {
@@ -350,49 +402,59 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
       await this.applyOnFrequency();
     }
   }
-
   // ─── SPATIAL PIPELINE ─────────────────────────────────────────
-  private async applyOnSpatial(): Promise<void> {
-    if (!this.originalFile) return;
-    this.loading = true;
-    this.resultReady = false;
-    try {
-      const spatialBlobUrl = await this.callSpatialOperation(this.originalFile);
-      this.loadingProgress = 50;   // step 1 of 2 done
-      if (this._pendingComplexBlobs) {
-        this.spatialResultBlobs = this._pendingComplexBlobs;
-        this._pendingComplexBlobs = null;
-        this.resultIsComplex = true;
-        this.spatialResultMode = 'magnitude';
-      } else {
-        this.spatialResultBlobs = { image: spatialBlobUrl };
-        this.resultIsComplex = false;
-        this.spatialResultMode = 'image';
-      }
-      this.resultSrc = this.spatialResultBlobs[this.spatialResultMode] ?? spatialBlobUrl;
+private async applyOnSpatial(): Promise<void> {
+  if (!this.originalFile) return;
+  this.loading = true;
+  this.resultReady = false;
+  try {
+    const form = this.buildActionForm(this.originalFile);
+    const res  = await fetch(`${BASE}/operate_then_fft`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`operate_then_fft failed: ${res.status}`);
+    this.loadingProgress = 80;
 
-      // Always compute at least 1 FT of the result (the base pass).
-      // chainFT is the number of *extra* passes on top of that, so total = 1 + chainFT.
-      const totalFTPasses = 1 + this.params.chainFT;
-      this.ftResultBlobs = await this.callFftOnBlobUrl(spatialBlobUrl, 'A', totalFTPasses);
-      this.loadingProgress = 100;  // step 2 of 2 done
-      // If even FT passes produced a spatial image, show IT as the spatial result
-      if (this.ftResultBlobs['spatial_passthrough']) {
-        this.resultSrc = this.ftResultBlobs['spatial_passthrough'];
-        this.spatialResultBlobs['image'] = this.ftResultBlobs['spatial_passthrough'];
-      }
+    const parts = await this.parseMultipart(res);
+    this.loadingProgress = 100;
 
-      this.ftResultSrc = this.ftResultBlobs[this.ftKey(this.ftResultMode, this.ftResultShifted)];
-
-      this.resultReady = true;
-      this.cdr.detectChanges();
-    } catch (err) {
-      console.error('applyOnSpatial error:', err);
-    } finally {
-      this.loading = false;
-      this.cdr.detectChanges();
-    }
+    // Spatial result
+  if (parts['spatial_magnitude']) {
+    this.spatialResultBlobs = {
+      magnitude: parts['spatial_magnitude'],
+      phase:     parts['spatial_phase'],
+      real:      parts['spatial_real'],
+      imaginary: parts['spatial_imaginary'],
+    };
+    this.resultIsComplex   = true;
+    this.spatialResultMode = 'magnitude';
+    this.resultSrc         = parts['spatial_magnitude'];
+  } else {
+    this.spatialResultBlobs = { image: parts['spatial'] };
+    this.resultIsComplex    = false;
+    this.spatialResultMode  = 'image';
+    this.resultSrc          = parts['spatial'];
   }
+    // Frequency result
+    this.ftResultBlobs = {
+      magnitude:            parts['magnitude'],
+      phase:                parts['phase'],
+      real:                 parts['real'],
+      imaginary:            parts['imaginary'],
+      unshifted_magnitude:  parts['unshifted_magnitude'],
+      unshifted_phase:      parts['unshifted_phase'],
+      unshifted_real:       parts['unshifted_real'],
+      unshifted_imaginary:  parts['unshifted_imaginary'],
+    };
+    this.ftResultSrc = this.ftResultBlobs[this.ftKey(this.ftResultMode, this.ftResultShifted)];
+
+    this.resultReady = true;
+    this.cdr.detectChanges();
+  } catch (err) {
+    console.error('applyOnSpatial error:', err);
+  } finally {
+    this.loading = false;
+    this.cdr.detectChanges();
+  }
+}
 
   // ─── FREQUENCY PIPELINE ───────────────────────────────────────
   private async applyOnFrequency(): Promise<void> {
@@ -405,11 +467,25 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
       if (!res.ok) throw new Error(`fft_then_operate failed: ${res.status}`);
       this.loadingProgress = 80;   // network done, parsing remains
 
-      const parts = await this.parseMultipart(res);
-      this.loadingProgress = 100;
-      this.resultSrc     = parts['spatial'];
-      this.resultIsComplex = false;
-      this.spatialResultMode = 'image';
+const parts = await this.parseMultipart(res);
+this.loadingProgress = 100;
+
+      if (parts['spatial_magnitude']) {
+        this.resultIsComplex   = true;
+        this.spatialResultMode = 'magnitude';
+        this.spatialResultBlobs = {
+          magnitude: parts['spatial_magnitude'],
+          phase:     parts['spatial_phase'],
+          real:      parts['spatial_real'],
+          imaginary: parts['spatial_imaginary'],
+        };
+        this.resultSrc = parts['spatial_magnitude'];
+      } else {
+        this.resultIsComplex   = false;
+        this.spatialResultMode = 'image';
+        this.spatialResultBlobs = { image: parts['spatial'] };
+        this.resultSrc = parts['spatial'];
+      }
       this.ftResultBlobs = {
         magnitude: parts['magnitude'],
         phase:     parts['phase'],
@@ -488,8 +564,8 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
   }
 
   private async opComplexExp(file: File): Promise<string> {
-    const form = this.buildForm(file, {
-      amplitude: 1,
+  const form = this.buildForm(file, {
+      amplitude: this.params.amplitude,
       freq_u:    this.params.freqU,
       freq_v:    this.params.freqV,
     });
@@ -527,11 +603,11 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
   }
 
   private async opDiff(file: File): Promise<string> {
-    return this.postAndGetImage(`${BASE}/differentiateimage`, this.buildForm(file, { axis: 'x' }));
-  }
+      return this.postAndGetImage(`${BASE}/differentiateimage`, this.buildForm(file, { axis: this.params.diffAxis }));
+    }
 
   private async opIntegrate(file: File): Promise<string> {
-    return this.postAndGetImage(`${BASE}/integrateimage`, this.buildForm(file, { axis: 'x' }));
+    return this.postAndGetImage(`${BASE}/integrateimage`, this.buildForm(file, { axis: this.params.diffAxis }));
   }
 
   private async opFtRepeat(file: File): Promise<string> {
@@ -632,9 +708,9 @@ private async callFftOnBlobUrl(
     form.append('sigma_x',        String(this.params.sigma));
     form.append('sigma_y',        String(this.params.sigma));
     form.append('symmetry_type',  this.selectedAction === 'even' ? 'even' : 'odd');
-    form.append('axis',           'x');
+    form.append('axis',           this.params.diffAxis);
     form.append('scenario_type',  this.params.ftScenarioType);
-    form.append('n',              String(this.params.ftRepeat));
+    form.append('n', String(1 + this.params.chainFT));
     form.append('image',          file);
     return form;
   }

@@ -181,10 +181,10 @@ def MultipleFourierTransforms(img, n, scenario_type):
         display_phase = np.zeros_like(cleaned_output)
         display_imag = np.zeros_like(cleaned_output)
         
-        return cleaned_output, display_mag, display_phase, display_real, display_imag
+        return cleaned_output, display_mag, display_phase, display_real, display_imag, display_mag, display_phase, display_real, display_imag
     
 
-def ReconstructImageFromFFT(F_complex, was_shifted=False):
+def ReconstructImageFromFFT(F_complex, was_shifted=False, preserve_complex=False):
     """
     Takes a 2D complex FFT array and reconstructs the spatial image.
     
@@ -200,6 +200,9 @@ def ReconstructImageFromFFT(F_complex, was_shifted=False):
         
     # 2. Perform the 2D Inverse Fast Fourier Transform
     img_reconstructed = np.fft.ifft2(F_ready)
+
+    if preserve_complex:
+        return img_reconstructed
     
     # 3. Discard microscopic imaginary rounding errors left by the math engine
     img_real = np.real(img_reconstructed)

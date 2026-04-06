@@ -71,30 +71,29 @@ def MirrorImage(image, mirror_axis: str, duplicate_mode: bool = True):
             bottom = np.hstack([np.flipud(img_array), np.flipud(np.fliplr(img_array))])
             return np.vstack([top, bottom])
 
-
 def MakeImageEvenOrOdd(image, symmetry_type: str):
-    img_array = np.asarray(image)
-    f_neg = np.rot90(img_array, k=2)
-    
+    img_array = np.asarray(image, dtype=np.complex128 if np.iscomplexobj(image) else np.float64)
+
+    if np.iscomplexobj(img_array):
+        # Frequency domain — mean subtraction is meaningless on a complex spectrum
+        img_centered = img_array
+        mean = 0
+    else:
+        # Spatial domain — remove DC offset before decomposition
+        mean = np.mean(img_array)
+        img_centered = img_array - mean
+
+    f_neg = np.roll(np.flip(img_centered, axis=(0, 1)), shift=(1, 1), axis=(0, 1))
+
     if symmetry_type == 'even':
-        return 0.5 * (img_array + f_neg)
+        out = 0.5 * (img_centered + f_neg)
+        out += mean
+        return out
     elif symmetry_type == 'odd':
-        raw_odd = 0.5 * (img_array - f_neg)
-        
-        # Min-Max Normalization to map 0 to mid-gray
-        o_min = np.min(raw_odd)
-        o_max = np.max(raw_odd)
-        
-        if o_max > o_min:
-            normalized_odd = (raw_odd - o_min) / (o_max - o_min) * 255.0
-        else:
-            normalized_odd = raw_odd
-            
-        return normalized_odd.astype(np.uint8)
+        return 0.5 * (img_centered - f_neg)
     else:
         raise ValueError("symmetry_type must be 'even' or 'odd'")
-
-
+    
 def RotateImage(image, angle: float, order: int = 3):
     img_array = np.asarray(image)
     
@@ -107,38 +106,25 @@ def RotateImage(image, angle: float, order: int = 3):
 
 
 def DifferentiateImage(image, axis='x', method='central'):
-    img_array = np.asarray(image)
-    
-    if method == 'central':
-        if axis == 'x':
-            kernel = np.array([[1, 0, -1]]) / 2.0
-        elif axis == 'y':
-            kernel = np.array([[1], [0], [-1]]) / 2.0
-            
-    elif method == 'sobel':
-        if axis == 'x':
-            kernel = np.array([[-1, 0, 1], 
-                               [-2, 0, 2], 
-                               [-1, 0, 1]]) / 8.0
-        elif axis == 'y':
-            kernel = np.array([[-1, -2, -1], 
-                               [ 0,  0,  0], 
-                               [ 1,  2,  1]]) / 8.0
-    else:
-        raise ValueError("Method must be 'central' or 'sobel'")
+    img_array = np.asarray(image, dtype=np.complex128 if np.iscomplexobj(image) else np.float64)
 
-    raw_derivative = convolve(img_array, kernel, mode='reflect')
-    
-    # Normalize to a 0-255 range so 0 becomes middle-gray
-    d_min = np.min(raw_derivative)
-    d_max = np.max(raw_derivative)
-    
-    if d_max > d_min:
-        normalized = (raw_derivative - d_min) / (d_max - d_min) * 255.0
+    if method == 'central':
+        kernel = np.array([[1, 0, -1]]) / 2.0 if axis == 'x' else np.array([[1], [0], [-1]]) / 2.0
+    elif method == 'sobel':
+        kernel = (np.array([[-1,0,1],[-2,0,2],[-1,0,1]]) / 8.0 if axis == 'x'
+                  else np.array([[-1,-2,-1],[0,0,0],[1,2,1]]) / 8.0)
+
+    if np.iscomplexobj(img_array):
+        # Differentiate real and imaginary parts separately, preserve complex structure
+        real_diff = convolve(img_array.real, kernel, mode='reflect')
+        imag_diff = convolve(img_array.imag, kernel, mode='reflect')
+        return real_diff + 1j * imag_diff   # return raw — no normalization
     else:
-        normalized = raw_derivative
-        
-    return normalized.astype(np.uint8)
+        raw = convolve(img_array.real, kernel, mode='reflect')
+        d_min, d_max = raw.min(), raw.max()
+        if d_max > d_min:
+            return ((raw - d_min) / (d_max - d_min) * 255).astype(np.uint8)
+        return raw.astype(np.uint8)
 
 def IntegrateImage(image, axis='x'):
     img_array = np.asarray(image)

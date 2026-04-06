@@ -507,3 +507,37 @@
   border-radius: 2px;
   transition: width 80ms linear;
 }
+
+.styled-input {
+  width: 100%;
+  background: #ffffff;
+  border: 1.5px solid #d0d8e8;
+  border-radius: 6px;
+  color: #1a2744;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  box-sizing: border-box;
+  outline: none;
+  -moz-appearance: textfield;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.styled-input::-webkit-outer-spin-button,
+.styled-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+.styled-input:focus {
+  border-color: #4a90d9;
+  box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+}
+
+.styled-input.invalid {
+  border-color: #e05b5b;
+  box-shadow: 0 0 0 3px rgba(224, 91, 91, 0.12);
+}
+
+.styled-input::placeholder {
+  color: #a0aec0;
+}

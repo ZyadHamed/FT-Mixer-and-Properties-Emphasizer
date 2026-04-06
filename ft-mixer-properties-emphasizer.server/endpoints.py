@@ -87,7 +87,18 @@ def stream_array(arr: np.ndarray) -> StreamingResponse:
     # SCENARIO 1: REAL ARRAY (Single Image)
     # ==========================================
     if not np.iscomplexobj(arr):
-        arr_uint8 = arr if arr.dtype == np.uint8 else np.clip(arr * 255, 0, 255).astype(np.uint8)
+        # Check if bipolar (has significant negative values) — odd signal case
+        if arr.min() < -1e-3:
+            # Center-zero normalization: map [-max_abs, +max_abs] → [0, 1]
+            max_abs = np.abs(arr).max()
+            if max_abs > 0:
+                arr_display = arr / (2 * max_abs) + 0.5
+            else:
+                arr_display = np.full_like(arr, 0.5)
+            arr_uint8 = np.clip(arr_display * 255, 0, 255).astype(np.uint8)
+        else:
+            arr_uint8 = arr if arr.dtype == np.uint8 else np.clip(arr * 255, 0, 255).astype(np.uint8)
+        
         buffer = io.BytesIO()
         Image.fromarray(arr_uint8).save(buffer, format="JPEG", quality=95)
         buffer.seek(0)
@@ -126,6 +137,10 @@ def stream_array(arr: np.ndarray) -> StreamingResponse:
     unshifted_real_bytes  = arr_to_bytes(unshifted_real)
     unshifted_imag_bytes  = arr_to_bytes(unshifted_imag)
 
+    print(unshifted_real)
+    print("----")
+    print(unshifted_imag)
+
     # --- 4. Build multipart response ---
     body = b""
     body += build_part("magnitude", shifted_mag_bytes,                     "image/jpeg")
@@ -162,6 +177,135 @@ def build_multipart_response_for_complex_exponential(img_complex: np.ndarray, bo
     body += build_part("real",      arr_to_bytes(display_real),       "image/jpeg")
     body += build_part("imaginary", arr_to_bytes(display_imaginary),  "image/jpeg")
     body += f"--{boundary}--\r\n".encode()
+
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type=f"multipart/form-data; boundary={boundary}",
+    )
+
+@app.post("/operate_then_fft")
+async def OperateThenFftEndpoint(
+    action: str = Form(...),
+    # Shift
+    shift_x: int = Form(0),
+    shift_y: int = Form(0),
+    cyclic:  bool = Form(True),
+    flip:    bool = Form(False),
+    # Stretch
+    stretch_x: float = Form(1.0),
+    stretch_y: float = Form(1.0),
+    # Rotate
+    angle: float = Form(0.0),
+    # Mirror
+    mirror_axis:    str  = Form("horizontal"),
+    duplicate_mode: bool = Form(False),
+    # Complex exponential
+    amplitude: float = Form(1.0),
+    freq_u:    float = Form(0.0),
+    freq_v:    float = Form(0.0),
+    # Window
+    window_type:   str   = Form("gaussian"),
+    window_width:  int   = Form(256),
+    window_height: int   = Form(256),
+    center_x:      int   = Form(0),
+    center_y:      int   = Form(0),
+    sigma_x:       float = Form(30.0),
+    sigma_y:       float = Form(30.0),
+    # Symmetry / calculus
+    symmetry_type: str = Form("even"),
+    axis:          str = Form("x"),
+    # FT repeat
+    scenario_type: str = Form("B"),
+    n:             int = Form(1),
+    # Image input
+    image:         Optional[UploadFile] = File(None),
+    complex_input: Optional[str]        = Form(None),
+):
+    # 1. Parse input
+    arr = await parse_image_input(image, complex_input)
+
+    # 2. Apply the operation directly on the spatial input — no FFT first
+    if action == "shift":
+        operated = ShiftImage(arr, shift_x, shift_y, cyclic=cyclic, flip=flip)
+    elif action == "stretch":
+        operated = StretchImage(arr, stretch_x, stretch_y)
+    elif action == "rotate":
+        operated = RotateImage(arr, angle)
+    elif action == "mirror":
+        operated = MirrorImage(arr, mirror_axis, duplicate_mode)
+    elif action == "even":
+        operated = MakeImageEvenOrOdd(arr, "even")
+    elif action == "odd":
+        operated = MakeImageEvenOrOdd(arr, "odd")
+    elif action == "complex_exp":
+        operated = MultiplyImageByComplexExponential(arr, amplitude, freq_u, freq_v)
+    elif action == "window":
+        operated = MultiplyByWindow(arr, window_width, window_height, center_x, center_y, window_type=window_type, sigma_x=sigma_x, sigma_y=sigma_y)
+    elif action == "differentiate":
+        operated = DifferentiateImage(arr, axis)
+    elif action == "integrate":
+        operated = IntegrateImage(arr, axis)
+    elif action == "ft_repeat":
+        operated, *_ = MultipleFourierTransforms(arr, n=n, scenario_type=scenario_type)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+
+    # 3. Build spatial display — handle complex spatial results (e.g. complex_exp)
+    if np.iscomplexobj(operated) and action == 'complex_exp':
+        _, sp_mag, sp_phase, sp_real, sp_imag = prepare_complex_spatial_for_display(operated)
+        spatial_is_complex = True
+        spatial_bytes = arr_to_bytes(sp_mag)
+    else:
+        spatial_is_complex = False
+        spatial_display = np.abs(operated) if np.iscomplexobj(operated) else operated
+        s_min, s_max = spatial_display.min(), spatial_display.max()
+        spatial_normalized = (spatial_display - s_min) / (s_max - s_min) if s_max > s_min else np.zeros_like(spatial_display)
+        spatial_bytes = arr_to_bytes(spatial_normalized.astype(np.float32))
+
+    # 4. FFT the operated result — work on float64, no clipping
+    fft_input = operated if np.iscomplexobj(operated) else operated.astype(np.float64)
+
+    current_scenario = 'C' if np.iscomplexobj(fft_input) else 'A'
+    print(current_scenario)
+    _, shifted_mag, shifted_phase, shifted_real, shifted_imag, \
+    unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag = \
+    MultipleFourierTransforms(fft_input, n=n, scenario_type=current_scenario)
+
+    shifted_mag_bytes       = arr_to_bytes(shifted_mag)
+    shifted_phase_bytes     = arr_to_bytes(shifted_phase)
+    shifted_real_bytes      = arr_to_bytes(shifted_real)
+    shifted_imag_bytes      = arr_to_bytes(shifted_imag)
+    unshifted_mag_bytes     = arr_to_bytes(unshifted_mag)
+    unshifted_phase_bytes   = arr_to_bytes(unshifted_phase)
+    unshifted_real_bytes    = arr_to_bytes(unshifted_real)
+    unshifted_imag_bytes    = arr_to_bytes(unshifted_imag)
+
+    boundary = "operate_fft_boundary"
+
+    def build_part(name: str, content: bytes, content_type: str) -> bytes:
+        header = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+        return header + content + b"\r\n"
+
+    body = b""
+    body += build_part("spatial",              spatial_bytes,          "image/jpeg")
+    if spatial_is_complex:
+        body += build_part("spatial_magnitude", arr_to_bytes(sp_mag),   "image/jpeg")
+        body += build_part("spatial_phase",     arr_to_bytes(sp_phase), "image/jpeg")
+        body += build_part("spatial_real",      arr_to_bytes(sp_real),  "image/jpeg")
+        body += build_part("spatial_imaginary", arr_to_bytes(sp_imag),  "image/jpeg")
+    body += build_part("magnitude",            shifted_mag_bytes,      "image/jpeg")
+    body += build_part("phase",                shifted_phase_bytes,    "image/jpeg")
+    body += build_part("real",                 shifted_real_bytes,     "image/jpeg")
+    body += build_part("imaginary",            shifted_imag_bytes,     "image/jpeg")
+    body += build_part("unshifted_magnitude",  unshifted_mag_bytes,    "image/jpeg")
+    body += build_part("unshifted_phase",      unshifted_phase_bytes,  "image/jpeg")
+    body += build_part("unshifted_real",       unshifted_real_bytes,   "image/jpeg")
+    body += build_part("unshifted_imaginary",  unshifted_imag_bytes,   "image/jpeg")
+    body += f"--{boundary}--\r\n".encode("utf-8")
 
     return StreamingResponse(
         io.BytesIO(body),
@@ -353,6 +497,7 @@ async def FftThenOperateEndpoint(
     arr = await parse_image_input(image, complex_input)
 
     # 2. FFT the input first
+    print(n)
     fft_result, *_ = MultipleFourierTransforms(arr, n=1, scenario_type="A")
 
     # 3. Apply the chosen operation on the FFT result
@@ -382,12 +527,22 @@ async def FftThenOperateEndpoint(
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
     # 4. IFFT back to spatial domain
-    spatial_result = ReconstructImageFromFFT(operated, was_shifted=False)
-    spatial_bytes = arr_to_bytes(
-        np.clip(np.real(spatial_result), 0, 1).astype(np.float32)
-        if np.iscomplexobj(spatial_result)
-        else np.clip(spatial_result, 0, 1).astype(np.float32)
-    )
+    spatial_result = ReconstructImageFromFFT(
+    operated,
+    was_shifted=False,
+    preserve_complex=(action == "shift")
+)
+    if action == "shift" and np.iscomplexobj(spatial_result):
+        _, sp_mag, sp_phase, sp_real, sp_imag = prepare_complex_spatial_for_display(spatial_result)
+        spatial_is_complex = True
+        spatial_bytes = arr_to_bytes(sp_mag)
+    else:
+        spatial_is_complex = False
+        spatial_bytes = arr_to_bytes(
+            np.clip(np.real(spatial_result), 0, 1).astype(np.float32)
+            if np.iscomplexobj(spatial_result)
+            else np.clip(spatial_result, 0, 1).astype(np.float32)
+        )
  
     # 5. Also compute FFT of the operated result for the frequency display
     _, shifted_mag, shifted_phase, shifted_real, shifted_imag, unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag = prepare_fft_for_display(operated)
@@ -415,8 +570,15 @@ async def FftThenOperateEndpoint(
 
     boundary = "fft_operate_boundary"
     # --- 4. Build multipart response ---
+
     body = b""
-    body += build_part("spatial",    spatial_bytes,    "image/jpeg")
+    body += build_part("spatial", spatial_bytes, "image/jpeg")
+    if spatial_is_complex:
+        print("Yes")
+        body += build_part("spatial_magnitude", arr_to_bytes(sp_mag),   "image/jpeg")
+        body += build_part("spatial_phase",     arr_to_bytes(sp_phase), "image/jpeg")
+        body += build_part("spatial_real",      arr_to_bytes(sp_real),  "image/jpeg")
+        body += build_part("spatial_imaginary", arr_to_bytes(sp_imag),  "image/jpeg")
     body += build_part("magnitude", shifted_mag_bytes,                     "image/jpeg")
     body += build_part("phase",     shifted_phase_bytes,                   "image/jpeg")
     body += build_part("real",      shifted_real_bytes,                    "image/jpeg")
