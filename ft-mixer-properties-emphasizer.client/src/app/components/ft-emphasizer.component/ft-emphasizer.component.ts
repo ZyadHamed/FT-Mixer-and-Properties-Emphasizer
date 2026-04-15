@@ -344,10 +344,7 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
       r.readAsDataURL(file);
     });
   }
-
 private buildActionForm(): FormData {
-  // No image appended — the backend operates on the long-lived
-  // _active_emphasizer set by /api/properties/upload.
   const form = new FormData();
   form.append('action',         this.selectedAction);
   form.append('shift_x',        String(this.params.shiftX));
@@ -372,7 +369,16 @@ private buildActionForm(): FormData {
   form.append('symmetry_type',  this.selectedAction === 'even' ? 'even' : 'odd');
   form.append('axis',           this.params.diffAxis);
   form.append('scenario_type',  this.params.ftScenarioType);
-  form.append('n',              String(1 + this.params.chainFT));
+
+  // ── n has two completely different meanings depending on action ──────
+  // ft_repeat: n is the total number of FFTs to apply (ftRepeat param)
+  // all other actions: n is the number of extra chain FFTs after the op
+  if (this.selectedAction === 'ft_repeat') {
+    form.append('n', String(this.params.ftRepeat));
+  } else {
+    form.append('n', String(1 + this.params.chainFT));
+  }
+
   return form;
 }
 

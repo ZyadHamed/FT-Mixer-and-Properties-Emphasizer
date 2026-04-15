@@ -104,10 +104,8 @@ def _fft_comps_to_parts(boundary: str, fft_comps: dict) -> bytes:
     body += _build_part(boundary, "unshifted_real",      arr_to_bytes(fft_comps["unshifted_real"]))
     body += _build_part(boundary, "unshifted_imaginary", arr_to_bytes(fft_comps["unshifted_imag"]))
     return body
-
-
 def _apply_operation(
-    img: ImagePropertiesEmphasizer,
+    img:            ImagePropertiesEmphasizer,
     action:         str,
     shift_x:        int,
     shift_y:        int,
@@ -130,38 +128,38 @@ def _apply_operation(
     sigma_y:        float,
     symmetry_type:  str,
     axis:           str,
+    n:              int  = 1,              # ← needed for ft_repeat
+    in_frequency_domain: bool = False,
 ) -> ImagePropertiesEmphasizer:
-    """
-    Dispatch table — applies the requested operation to an emphasizer and
-    returns a new emphasizer wrapping the result.  Shared by both endpoints.
-    """
+    fd = in_frequency_domain
     if action == "shift":
-        return img.shift(shift_x, shift_y, cyclic=cyclic, flip=flip)
+        return img.shift(shift_x, shift_y, cyclic=cyclic, flip=flip, in_frequency_domain=fd)
     elif action == "stretch":
-        return img.stretch(stretch_x, stretch_y)
+        return img.stretch(stretch_x, stretch_y, in_frequency_domain=fd)
     elif action == "rotate":
-        return img.rotate(angle)
+        return img.rotate(angle, in_frequency_domain=fd)
     elif action == "mirror":
-        return img.mirror(mirror_axis, duplicate_mode)
+        return img.mirror(mirror_axis, duplicate_mode, in_frequency_domain=fd)
     elif action == "even":
-        return img.make_even_or_odd("even")
+        return img.make_even_or_odd("even", in_frequency_domain=fd)
     elif action == "odd":
-        return img.make_even_or_odd("odd")
+        return img.make_even_or_odd("odd", in_frequency_domain=fd)
     elif action == "complex_exp":
-        return img.multiply_by_complex_exponential(amplitude, freq_u, freq_v)
+        return img.multiply_by_complex_exponential(amplitude, freq_u, freq_v, in_frequency_domain=fd)
     elif action == "window":
         return img.multiply_by_window(
             window_width, window_height, center_x, center_y,
             window_type=window_type, sigma_x=sigma_x, sigma_y=sigma_y,
+            in_frequency_domain=fd,
         )
     elif action == "differentiate":
-        return img.differentiate(axis)
+        return img.differentiate(axis, in_frequency_domain=fd)
     elif action == "integrate":
-        return img.integrate(axis)
+        return img.integrate(axis, in_frequency_domain=fd)
+    elif action == "ft_repeat":
+        return img.apply_n_ffts(n, in_frequency_domain=fd)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared form parameters (DRY — used by both operation endpoints)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,7 +229,6 @@ async def UploadPropertiesImageEndpoint(
 # ─────────────────────────────────────────────────────────────────────────────
 # /operate_then_fft
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.post("/operate_then_fft")
 async def OperateThenFftEndpoint(
     action:         str   = Form(...),
@@ -256,11 +253,11 @@ async def OperateThenFftEndpoint(
     sigma_y:        float = Form(30.0),
     symmetry_type:  str   = Form("even"),
     axis:           str   = Form("x"),
+    n:              int   = Form(0),    # number of chained FFTs after the operation
 ):
-    # ── 1. Pull the long-lived instance (no image bytes needed) ──────────
     img = _get_emphasizer()
 
-    # ── 2. Apply the spatial operation on the stored original array ───────
+    # ── 1. Apply the spatial operation ────────────────────────────────────
     result_img = _apply_operation(
         img, action,
         shift_x, shift_y, cyclic, flip,
@@ -271,14 +268,17 @@ async def OperateThenFftEndpoint(
         window_type, window_width, window_height, center_x, center_y,
         sigma_x, sigma_y,
         symmetry_type, axis,
+        n=n,
+        in_frequency_domain=False,
     )
 
     operated = result_img.array
 
-    # ── 3. Build the spatial display image ────────────────────────────────
-    # complex_exp is the only action that produces a meaningful complex
-    # spatial result that needs all 4 spatial components shown separately.
-    spatial_is_complex = result_img.is_complex() and action == "complex_exp"
+    # ── 2. Spatial display (always shows the result of the operation) ─────
+    spatial_is_complex = (
+        (result_img.is_complex() and action == "complex_exp")
+        or (action == "ft_repeat" and (n % 4) in [1, 3])
+    )
 
     if spatial_is_complex:
         sp_comps      = result_img.get_complex_spatial_components()
@@ -289,16 +289,47 @@ async def OperateThenFftEndpoint(
         norm    = (display - lo) / (hi - lo) if hi > lo else np.zeros_like(display)
         spatial_bytes = arr_to_bytes(norm.astype(np.float32))
 
-    # ── 4. Compute FFT display components of the operated result ──────────
-    fft_comps = result_img.get_fft_components()
+    # ── 3. Apply n chained FFTs to the operated result for frequency display
+    #    ft_repeat: result IS already the FFT, display it directly
+    #    everything else: apply n FFTs to the operated result
+    #      n=0 → 1 FFT  (standard single FFT display)
+    #      n=1 → 1 FFT  (same — 1 extra FFT of a spatial image = FFT)
+    #      n=2 → 2 FFTs (FFT twice = flipped image, shown in frequency panels)
+    #      n=3 → 3 FFTs etc.
+    result_is_fft = (action == "ft_repeat" and (n % 4) in [1, 3])
 
-    # ── 5. Assemble multipart response ────────────────────────────────────
+    if result_is_fft:
+        # ft_repeat already produced the FFT — display it directly
+        fft_display_array = operated
+    else:
+        # Apply n chained FFTs. If n=0, treat as 1 (always show at least 1 FFT)
+        effective_n = n if n > 0 else 1
+        chained = result_img.apply_n_ffts(effective_n)
+        fft_display_array = chained.array
+
+    (
+        _,
+        shifted_mag,   shifted_phase,   shifted_real,   shifted_imag,
+        unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag,
+    ) = FFT_Applicable_Image._prepare_fft_for_display(fft_display_array)
+
+    fft_comps = {
+        "shifted_mag":      shifted_mag,
+        "shifted_phase":    shifted_phase,
+        "shifted_real":     shifted_real,
+        "shifted_imag":     shifted_imag,
+        "unshifted_mag":    unshifted_mag,
+        "unshifted_phase":  unshifted_phase,
+        "unshifted_real":   unshifted_real,
+        "unshifted_imag":   unshifted_imag,
+    }
+
+    # ── 4. Assemble multipart response ────────────────────────────────────
     boundary = "operate_fft_boundary"
     body     = b""
 
     body += _build_part(boundary, "spatial", spatial_bytes)
 
-    # Only include the 4 spatial sub-components when the result is complex
     if spatial_is_complex:
         body += _build_part(boundary, "spatial_magnitude", arr_to_bytes(sp_comps["magnitude"]))
         body += _build_part(boundary, "spatial_phase",     arr_to_bytes(sp_comps["phase"]))
@@ -312,8 +343,6 @@ async def OperateThenFftEndpoint(
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",
     )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # /fft_then_operate
 # ─────────────────────────────────────────────────────────────────────────────
@@ -344,21 +373,12 @@ async def FftThenOperateEndpoint(
     scenario_type:  str   = Form("B"),
     n:              int   = Form(1),
 ):
-    # ── 1. Pull the long-lived instance ───────────────────────────────────
     img = _get_emphasizer()
 
-    # ── 2. Get the raw FFT and SHIFT it so DC is in the center ────────────
-    #    All operations (shift, window, mirror, etc.) are only meaningful
-    #    when the DC component is centered. Without this, a "shift" in the
-    #    frequency domain operates on the wrong quadrant layout and the
-    #    IFFT produces garbage.
-    raw_fft        = img.get_raw_fft()
-    fft_shifted    = np.fft.fftshift(raw_fft)
-    fft_img        = ImagePropertiesEmphasizer(array=fft_shifted)
-
-    # ── 3. Apply operation on the DC-centered FFT ─────────────────────────
+    # ── 1. Apply operation with in_frequency_domain=True ─────────────────
+    #    The class handles fftshift → operate → ifftshift → ifft2 internally
     result_img = _apply_operation(
-        fft_img, action,
+        img, action,
         shift_x, shift_y, cyclic, flip,
         stretch_x, stretch_y,
         angle,
@@ -367,38 +387,34 @@ async def FftThenOperateEndpoint(
         window_type, window_width, window_height, center_x, center_y,
         sigma_x, sigma_y,
         symmetry_type, axis,
+        n=n,                        # ← add this
+        in_frequency_domain=True,  # True for fft_then_operate
     )
 
-    operated = result_img.array   # still complex, still DC-centered
+    operated = result_img.array         # spatial domain (complex after ifft2)
 
-    # ── 4. IFFT ───────────────────────────────────────────────────────────
-    #    The operated array is DC-centered so we MUST ifftshift before
-    #    ifft2, otherwise the spatial result is completely wrong.
-    spatial_complex = np.fft.ifft2(np.fft.ifftshift(operated))
-
-    # ── 5. Spatial display ────────────────────────────────────────────────
+    # ── 2. Spatial display ────────────────────────────────────────────────
     spatial_is_complex = action == "shift"
 
     if spatial_is_complex:
-        spatial_img   = ImagePropertiesEmphasizer(array=spatial_complex)
-        sp_comps      = spatial_img.get_complex_spatial_components()
+        sp_comps      = result_img.get_complex_spatial_components()
         spatial_bytes = arr_to_bytes(sp_comps["magnitude"])
     else:
-        spatial_real  = np.real(spatial_complex)
+        spatial_real  = np.real(operated)
         lo, hi        = spatial_real.min(), spatial_real.max()
         norm          = (spatial_real - lo) / (hi - lo) if hi > lo else np.zeros_like(spatial_real)
         spatial_bytes = arr_to_bytes(norm.astype(np.float32))
 
-    # ── 6. FFT display of the operated frequency data ─────────────────────
-    #    The result_img still holds the DC-centered operated FFT.
-    #    get_fft_components() will call fft2 on it which is wrong — we
-    #    want to DISPLAY the operated FFT directly, not FFT it again.
-    #    So we call _prepare_fft_for_display directly on the operated array.
+    # ── 3. FFT display of the intermediate frequency-domain result ────────
+    #    We need to show what the FFT looked like AFTER the operation.
+    #    Re-FFT the spatial result and undo the centering before passing
+    #    to _prepare_fft_for_display so shifted/unshifted labels are correct.
+    re_fft = np.fft.fft2(operated)
     (
         _,
         shifted_mag,   shifted_phase,   shifted_real,   shifted_imag,
         unshifted_mag, unshifted_phase, unshifted_real, unshifted_imag,
-    ) = FFT_Applicable_Image._prepare_fft_for_display(np.fft.ifftshift(operated))
+    ) = FFT_Applicable_Image._prepare_fft_for_display(re_fft)
 
     fft_comps = {
         "shifted_mag":      shifted_mag,
@@ -411,7 +427,7 @@ async def FftThenOperateEndpoint(
         "unshifted_imag":   unshifted_imag,
     }
 
-    # ── 7. Assemble multipart response ────────────────────────────────────
+    # ── 4. Assemble multipart response ────────────────────────────────────
     boundary = "fft_operate_boundary"
     body     = b""
 
@@ -430,7 +446,6 @@ async def FftThenOperateEndpoint(
         io.BytesIO(body),
         media_type=f"multipart/form-data; boundary={boundary}",
     )
-
 
 ## Mixer Code
 # ─────────────────────────────────────────────────────────────────────────────

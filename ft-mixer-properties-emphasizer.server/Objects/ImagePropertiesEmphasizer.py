@@ -5,34 +5,51 @@ from .FFT_Applicable_Image import FFT_Applicable_Image
 
 
 class ImagePropertiesEmphasizer(FFT_Applicable_Image):
-    """
-    Extends FFT_Applicable_Image with every spatial / frequency operation
-    that is exposed by the endpoints.
-
-    Each method returns a *new* ImagePropertiesEmphasizer containing the
-    result so that operations can be chained and the original is never
-    mutated.  The caller can also call .array on the result directly.
-    """
 
     # ──────────────────────────────────────────────────────────────────────
     # Factory helper
     # ──────────────────────────────────────────────────────────────────────
 
     def _wrap(self, arr: np.ndarray) -> "ImagePropertiesEmphasizer":
-        """Wrap a result array in a fresh instance (no I/O overhead)."""
         return ImagePropertiesEmphasizer(array=arr)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Spatial operations  (mirror the standalone functions 1-to-1)
+    # Frequency-domain execution helper
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _apply_in_frequency_domain(
+        self,
+        operation,          # callable: (ImagePropertiesEmphasizer) -> ImagePropertiesEmphasizer
+    ) -> "ImagePropertiesEmphasizer":
+        """
+        Shared wrapper for in_frequency_domain=True on every operation:
+          1. FFT the stored array and center DC
+          2. Apply the operation on the centered FFT
+          3. ifftshift → ifft2 → return real spatial result
+        """
+        fft_centered = np.fft.fftshift(self.get_raw_fft())
+        fft_img      = ImagePropertiesEmphasizer(array=fft_centered)
+        result_fft   = operation(fft_img)
+        spatial      = np.fft.ifft2(np.fft.ifftshift(result_fft.array))
+        return self._wrap(spatial)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Operations
     # ──────────────────────────────────────────────────────────────────────
 
     def shift(
         self,
-        shift_x: int = 0,
-        shift_y: int = 0,
+        shift_x: int  = 0,
+        shift_y: int  = 0,
         cyclic:  bool = False,
         flip:    bool = True,
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.shift(shift_x, shift_y, cyclic=cyclic, flip=flip)
+            )
+
         arr = self._array
         if flip:
             shift_y = -shift_y
@@ -55,9 +72,15 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
     def multiply_by_complex_exponential(
         self,
         amplitude: float,
-        freq_u: float,
-        freq_v: float,
+        freq_u:    float,
+        freq_v:    float,
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.multiply_by_complex_exponential(amplitude, freq_u, freq_v)
+            )
+
         arr = self._array
         H, W = arr.shape
         xx, yy = np.meshgrid(np.arange(W), np.arange(H))
@@ -68,9 +91,15 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
         self,
         stretch_x: float,
         stretch_y: float,
-        order: int = 3,
+        order:     int  = 3,
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
-        arr = self._array
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.stretch(stretch_x, stretch_y, order=order)
+            )
+
+        arr     = self._array
         factors = (stretch_y, stretch_x)
         if np.iscomplexobj(arr):
             real_s = zoom(arr.real, factors, order=order)
@@ -82,7 +111,13 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
         self,
         mirror_axis:    str  = "horizontal",
         duplicate_mode: bool = True,
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.mirror(mirror_axis, duplicate_mode)
+            )
+
         arr = self._array
         if not duplicate_mode:
             if mirror_axis == "horizontal":
@@ -102,12 +137,18 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
     def make_even_or_odd(
         self,
         symmetry_type: str,
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.make_even_or_odd(symmetry_type)
+            )
+
         arr = self._coerce(self._array)
         if np.iscomplexobj(arr):
             img_centered, mean = arr, 0
         else:
-            mean = np.mean(arr)
+            mean         = np.mean(arr)
             img_centered = arr - mean
 
         f_neg = np.roll(
@@ -124,8 +165,14 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
     def rotate(
         self,
         angle: float,
-        order: int = 3,
+        order: int  = 3,
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.rotate(angle, order=order)
+            )
+
         arr = self._array
         if np.iscomplexobj(arr):
             real_r = ndimage_rotate(arr.real, angle, reshape=True, order=order)
@@ -137,7 +184,13 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
         self,
         axis:   str = "x",
         method: str = "central",
+        in_frequency_domain: bool = False,
     ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.differentiate(axis, method=method)
+            )
+
         arr = self._coerce(self._array)
         if method == "central":
             kernel = (
@@ -167,7 +220,16 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
             normed = raw.astype(np.uint8)
         return self._wrap(normed.astype(np.float64))
 
-    def integrate(self, axis: str = "x") -> "ImagePropertiesEmphasizer":
+    def integrate(
+        self,
+        axis: str = "x",
+        in_frequency_domain: bool = False,
+    ) -> "ImagePropertiesEmphasizer":
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.integrate(axis)
+            )
+
         if axis == "x":
             return self._wrap(np.cumsum(self._array, axis=1))
         elif axis == "y":
@@ -181,9 +243,18 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
         center_x:      int,
         center_y:      int,
         window_type:   str = "hamming",
+        in_frequency_domain: bool = False,
         **kwargs,
     ) -> "ImagePropertiesEmphasizer":
-        arr   = self._array
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.multiply_by_window(
+                    window_width, window_height, center_x, center_y,
+                    window_type=window_type, **kwargs,
+                )
+            )
+
+        arr        = self._array
         rows, cols = arr.shape
 
         start_y = center_y - window_height // 2
@@ -206,8 +277,8 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
         elif window_type == "gaussian":
             sig_y = kwargs.get("sigma_y", window_height / 6)
             sig_x = kwargs.get("sigma_x", window_width  / 6)
-            y = np.arange(window_height) - window_height / 2
-            x = np.arange(window_width)  - window_width  / 2
+            y     = np.arange(window_height) - window_height / 2
+            x     = np.arange(window_width)  - window_width  / 2
             win_y = np.exp(-(y ** 2) / (2 * sig_y ** 2))
             win_x = np.exp(-(x ** 2) / (2 * sig_x ** 2))
         else:
@@ -220,15 +291,11 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
         return self._wrap(arr * padded)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Complex-spatial display helper  (used by complex_exp endpoint)
+    # Complex-spatial display helper
     # ──────────────────────────────────────────────────────────────────────
 
     def get_complex_spatial_components(self) -> dict:
-        """
-        For a complex spatial array (e.g. after multiply_by_complex_exponential)
-        return the 4 display-ready components normalised to 0.0–1.0.
-        """
-        arr = self._array
+        arr   = self._array
         mag   = np.abs(arr)
         phase = np.angle(arr)
         real  = np.real(arr)
@@ -239,8 +306,37 @@ class ImagePropertiesEmphasizer(FFT_Applicable_Image):
             return (a - lo) / (hi - lo) if hi > lo else a
 
         return {
-            "magnitude":  _minmax(mag),
-            "phase":      (phase + np.pi) / (2 * np.pi),
-            "real":       _minmax(real),
-            "imaginary":  _minmax(imag),
+            "magnitude": _minmax(mag),
+            "phase":     (phase + np.pi) / (2 * np.pi),
+            "real":      _minmax(real),
+            "imaginary": _minmax(imag),
         }
+    
+    def apply_n_ffts(
+    self,
+    n: int,
+    in_frequency_domain: bool = False,
+    ) -> "ImagePropertiesEmphasizer":
+        """
+        Applies the 2D FFT n times using the modulo-4 identity:
+        n%4 == 0 → original
+        n%4 == 1 → FFT
+        n%4 == 2 → flipped (180° rotation)
+        n%4 == 3 → flipped FFT
+        """
+        if in_frequency_domain:
+            return self._apply_in_frequency_domain(
+                lambda img: img.apply_n_ffts(n)
+            )
+
+        state = n % 4
+        arr   = self._array
+
+        if state == 0:
+            return self._wrap(arr)
+        elif state == 1:
+            return self._wrap(np.fft.fft2(arr, norm='ortho'))
+        elif state == 2:
+            return self._wrap(arr[::-1, ::-1])
+        elif state == 3:
+            return self._wrap(np.fft.fft2(arr, norm='ortho')[::-1, ::-1])
