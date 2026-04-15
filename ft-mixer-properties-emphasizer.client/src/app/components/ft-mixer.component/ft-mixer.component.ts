@@ -2,6 +2,8 @@
 import { Component, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
+import { firstValueFrom } from 'rxjs';
+
 import { Subject, takeUntil } from 'rxjs';
 import { ImageViewportComponent, ImageViewportData, FtComponent } from '../image-viewport/image-viewport.component';
 import { MixerService, MixRequest } from '../../services/mixer.service';
@@ -123,29 +125,33 @@ export class FtMixerComponent implements OnDestroy {
   phasePct(img: ImageSlot): string {
     return (img.phaseWeight * 100).toFixed(1) + '%';
   }
+async onImageSelected(file: File, index: number): Promise<void> {
+  this.images[index].file = file;
+  this.images[index].viewportData = null;
 
-  // ── Image upload ──────────────────────────────────────────────────────
-  async onImageSelected(file: File, index: number): Promise<void> {
-    this.images[index].file = file;
-    this.images[index].viewportData = null;
+  try {
+    const components = await firstValueFrom(
+      this.mixerService.uploadSlot(
+        index as 0 | 1 | 2 | 3,
+        file,
+        this.images[index].magWeight,
+        this.images[index].phaseWeight,
+      )
+    );
 
-    try {
-      const result = await this.imageProcessingService.uploadAndProcess(
-        file, this.unifyPolicy, this.keepAspectRatio,
-      );
-      this.images[index].viewportData = {
-        originalSrc: result.originalSrc,
-        ftComponents: {
-          magnitude: result.magnitude,
-          phase: result.phase,
-          real: result.real,
-          imaginary: result.imaginary,
-        },
-      };
-    } catch (err) {
-      console.error(`Failed to process image ${index + 1}:`, err);
-    }
+    this.images[index].viewportData = {
+      originalSrc: components.original,
+      ftComponents: {
+        magnitude: components.magnitude,
+        phase:     components.phase,
+        real:      components.real,
+        imaginary: components.imaginary,
+      },
+    };
+  } catch (err) {
+    console.error(`Failed to upload slot ${index + 1}:`, err);
   }
+}
 
   onComponentChanged(component: FtComponent, index: number): void {
     this.images[index].activeComponent = component;
@@ -158,59 +164,59 @@ export class FtMixerComponent implements OnDestroy {
     this.outputs.forEach((o, i) => (o.active = i === index));
   }
 
-  // ── Mix ────────────────────────────────────────────────────────────────
-  startMix(): void {
-    this.cancel$.next();
+startMix(): void {
+  this.cancel$.next();
 
-    const hasImages = this.images.some(img => img.file !== null);
-    if (!hasImages) return;
+  const hasImages = this.images.some(img => img.file !== null);
+  if (!hasImages) return;
 
-    this.isMixing = true;
-    this.mixProgress = 0;
+  this.isMixing = true;
+  this.mixProgress = 0;
 
-    const request: MixRequest = {
-      images: this.images.map(img => ({
-        file: img.file,
-        magWeight: img.magWeight,
-        phaseWeight: img.phaseWeight,
-      })),
-      componentPair: this.componentPair,
-      regionType: this.regionType,
-      regionSize: this.regionSize,
-      unifyPolicy: this.unifyPolicy,
-      keepAspectRatio: this.keepAspectRatio,
-    };
+  const request: MixRequest = {
+    componentPair:   this.componentPair,
+    regionType:      this.regionType,
+    regionSize:      this.regionSize,
+    unifyPolicy:     this.unifyPolicy,
+    keepAspectRatio: this.keepAspectRatio,
+    weights: [
+      { magWeight: this.images[0].magWeight, phaseWeight: this.images[0].phaseWeight },
+      { magWeight: this.images[1].magWeight, phaseWeight: this.images[1].phaseWeight },
+      { magWeight: this.images[2].magWeight, phaseWeight: this.images[2].phaseWeight },
+      { magWeight: this.images[3].magWeight, phaseWeight: this.images[3].phaseWeight },
+    ],
+  };
 
-    this.mixerService
-      .runMix(request)
-      .pipe(takeUntil(this.cancel$), takeUntil(this.destroy$))
-      .subscribe({
-        next: (event) => {
-          if (event.type === 'progress') {
-            this.mixProgress = event.value;
+  this.mixerService
+    .runMix(request)
+    .pipe(takeUntil(this.cancel$), takeUntil(this.destroy$))
+    .subscribe({
+      next: (event) => {
+        if (event.type === 'progress') {
+          this.mixProgress = event.value;
 
-          } else if (event.type === 'result') {
-            this.isMixing = false;
-            this.mixProgress = 100;
-
-            this.outputs[this.outputTarget].viewportData = {
-              originalSrc: event.resultSrc,
-              ftComponents: {
-                magnitude: event.magnitude,
-                phase: event.phase,
-                real: event.real,
-                imaginary: event.imaginary,
-              },
-            };
-          }
-        },
-        error: (err) => {
-          console.error('Mix failed:', err);
+        } else if (event.type === 'result') {
           this.isMixing = false;
-          this.mixProgress = 0;
-        },
-      });
-  }
+          this.mixProgress = 100;
+
+          this.outputs[this.outputTarget].viewportData = {
+            originalSrc: event.resultSrc,
+            ftComponents: {
+              magnitude: event.magnitude,
+              phase:     event.phase,
+              real:      event.real,
+              imaginary: event.imaginary,
+            },
+          };
+        }
+      },
+      error: (err) => {
+        console.error('Mix failed:', err);
+        this.isMixing = false;
+        this.mixProgress = 0;
+      },
+    });
+}
 
   cancelMix(): void {
     this.cancel$.next();

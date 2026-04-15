@@ -345,36 +345,78 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
     });
   }
 
-  private async computeFftOfOriginal(file: File): Promise<void> {
+private buildActionForm(): FormData {
+  // No image appended — the backend operates on the long-lived
+  // _active_emphasizer set by /api/properties/upload.
+  const form = new FormData();
+  form.append('action',         this.selectedAction);
+  form.append('shift_x',        String(this.params.shiftX));
+  form.append('shift_y',        String(this.params.shiftY));
+  form.append('cyclic',         String(this.params.cyclicShift));
+  form.append('flip',           String(this.params.flipShift));
+  form.append('stretch_x',      String(this.params.scaleX));
+  form.append('stretch_y',      String(this.params.scaleY));
+  form.append('angle',          String(this.params.angle));
+  form.append('mirror_axis',    this.params.mirrorAxis);
+  form.append('duplicate_mode', String(this.params.duplicateMode));
+  form.append('amplitude',      '1');
+  form.append('freq_u',         String(this.params.freqU));
+  form.append('freq_v',         String(this.params.freqV));
+  form.append('window_type',    this.params.windowType);
+  form.append('window_width',   String(this.params.windowW));
+  form.append('window_height',  String(this.params.windowH));
+  form.append('center_x',       String(Math.round(this.imageNaturalW / 2 + this.params.windowCenterX)));
+  form.append('center_y',       String(Math.round(this.imageNaturalH / 2 + this.params.windowCenterY)));
+  form.append('sigma_x',        String(this.params.sigma));
+  form.append('sigma_y',        String(this.params.sigma));
+  form.append('symmetry_type',  this.selectedAction === 'even' ? 'even' : 'odd');
+  form.append('axis',           this.params.diffAxis);
+  form.append('scenario_type',  this.params.ftScenarioType);
+  form.append('n',              String(1 + this.params.chainFT));
+  return form;
+}
+
+// ─── PRIVATE HELPER ───────────────────────────────────────────
+
+private async b64ToObjectUrl(b64: string): Promise<string> {
+  // Strip the data URL prefix if present, then decode to a blob URL
+  const base64Data = b64.includes(',') ? b64.split(',')[1] : b64;
+  const binary     = atob(base64Data);
+  const bytes      = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+}
+
+private async computeFftOfOriginal(file: File): Promise<void> {
   this.loading = true;
   try {
+    // POST to /api/properties/upload — this creates the long-lived
+    // instance on the backend AND returns the FFT display components.
+    // No separate operate_then_fft call needed just to show the original FFT.
     const form = new FormData();
-    form.append('action',        'shift');
-    form.append('shift_x',       '0');
-    form.append('shift_y',       '0');
-    form.append('cyclic',        'true');
-    form.append('flip',          'false');
-    form.append('window_width',  '256');
-    form.append('window_height', '256');
-    form.append('center_x',      '0');
-    form.append('center_y',      '0');
-    form.append('image',         file);
+    form.append('image', file);
 
-    const res = await fetch(`${BASE}/operate_then_fft`, { method: 'POST', body: form });
-    if (!res.ok) throw new Error(`FFT failed: ${res.status}`);
+    const res = await fetch(`${BASE}/api/properties/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
 
-    const parts = await this.parseMultipart(res);
+    const data = await res.json();
+
     this.ftOrigBlobs = {
-      magnitude:            parts['magnitude'],
-      phase:                parts['phase'],
-      real:                 parts['real'],
-      imaginary:            parts['imaginary'],
-      unshifted_magnitude:  parts['unshifted_magnitude'],
-      unshifted_phase:      parts['unshifted_phase'],
-      unshifted_real:       parts['unshifted_real'],
-      unshifted_imaginary:  parts['unshifted_imaginary'],
+      magnitude:           data.magnitude   ? await this.b64ToObjectUrl(data.magnitude)   : '',
+      phase:               data.phase       ? await this.b64ToObjectUrl(data.phase)       : '',
+      real:                data.real        ? await this.b64ToObjectUrl(data.real)        : '',
+      imaginary:           data.imaginary   ? await this.b64ToObjectUrl(data.imaginary)   : '',
+      // Upload endpoint returns shifted components only.
+      // Mirror them into unshifted slots so mode-switching never breaks.
+      unshifted_magnitude: data.magnitude   ? await this.b64ToObjectUrl(data.magnitude)   : '',
+      unshifted_phase:     data.phase       ? await this.b64ToObjectUrl(data.phase)       : '',
+      unshifted_real:      data.real        ? await this.b64ToObjectUrl(data.real)        : '',
+      unshifted_imaginary: data.imaginary   ? await this.b64ToObjectUrl(data.imaginary)   : '',
     };
-    this.ftOrigSrc = this.ftOrigBlobs[this.ftOrigMode];
+    this.ftOrigSrc = this.ftOrigBlobs[this.ftKey(this.ftOrigMode, this.ftOrigShifted)];
     this.cdr.detectChanges();
   } catch (err) {
     console.error('computeFftOfOriginal error:', err);
@@ -383,6 +425,7 @@ private dataURLtoFile(dataURL: string, filename: string): Promise<File> {
     this.cdr.detectChanges();
   }
 }
+
 
 onChainFTChange(value: any): void {
   const parsed = parseInt(value, 10);
@@ -402,13 +445,14 @@ onChainFTChange(value: any): void {
       await this.applyOnFrequency();
     }
   }
-  // ─── SPATIAL PIPELINE ─────────────────────────────────────────
-private async applyOnSpatial(): Promise<void> {
-  if (!this.originalFile) return;
+
+  private async applyOnSpatial(): Promise<void> {
   this.loading = true;
   this.resultReady = false;
   try {
-    const form = this.buildActionForm(this.originalFile);
+    // No image sent — backend operates on the long-lived instance
+    // created by the most recent /api/properties/upload call.
+    const form = this.buildActionForm();
     const res  = await fetch(`${BASE}/operate_then_fft`, { method: 'POST', body: form });
     if (!res.ok) throw new Error(`operate_then_fft failed: ${res.status}`);
     this.loadingProgress = 80;
@@ -416,33 +460,32 @@ private async applyOnSpatial(): Promise<void> {
     const parts = await this.parseMultipart(res);
     this.loadingProgress = 100;
 
-    // Spatial result
-  if (parts['spatial_magnitude']) {
-    this.spatialResultBlobs = {
-      magnitude: parts['spatial_magnitude'],
-      phase:     parts['spatial_phase'],
-      real:      parts['spatial_real'],
-      imaginary: parts['spatial_imaginary'],
-    };
-    this.resultIsComplex   = true;
-    this.spatialResultMode = 'magnitude';
-    this.resultSrc         = parts['spatial_magnitude'];
-  } else {
-    this.spatialResultBlobs = { image: parts['spatial'] };
-    this.resultIsComplex    = false;
-    this.spatialResultMode  = 'image';
-    this.resultSrc          = parts['spatial'];
-  }
-    // Frequency result
+    if (parts['spatial_magnitude']) {
+      this.spatialResultBlobs = {
+        magnitude: parts['spatial_magnitude'],
+        phase:     parts['spatial_phase'],
+        real:      parts['spatial_real'],
+        imaginary: parts['spatial_imaginary'],
+      };
+      this.resultIsComplex   = true;
+      this.spatialResultMode = 'magnitude';
+      this.resultSrc         = parts['spatial_magnitude'];
+    } else {
+      this.spatialResultBlobs = { image: parts['spatial'] };
+      this.resultIsComplex    = false;
+      this.spatialResultMode  = 'image';
+      this.resultSrc          = parts['spatial'];
+    }
+
     this.ftResultBlobs = {
-      magnitude:            parts['magnitude'],
-      phase:                parts['phase'],
-      real:                 parts['real'],
-      imaginary:            parts['imaginary'],
-      unshifted_magnitude:  parts['unshifted_magnitude'],
-      unshifted_phase:      parts['unshifted_phase'],
-      unshifted_real:       parts['unshifted_real'],
-      unshifted_imaginary:  parts['unshifted_imaginary'],
+      magnitude:           parts['magnitude'],
+      phase:               parts['phase'],
+      real:                parts['real'],
+      imaginary:           parts['imaginary'],
+      unshifted_magnitude: parts['unshifted_magnitude'],
+      unshifted_phase:     parts['unshifted_phase'],
+      unshifted_real:      parts['unshifted_real'],
+      unshifted_imaginary: parts['unshifted_imaginary'],
     };
     this.ftResultSrc = this.ftResultBlobs[this.ftKey(this.ftResultMode, this.ftResultShifted)];
 
@@ -456,75 +499,60 @@ private async applyOnSpatial(): Promise<void> {
   }
 }
 
-  // ─── FREQUENCY PIPELINE ───────────────────────────────────────
-  private async applyOnFrequency(): Promise<void> {
-    if (!this.originalFile) return;
-    this.loading = true;
-    this.resultReady = false;
-    try {
-      const form = this.buildActionForm(this.originalFile);
-      const res  = await fetch(`${BASE}/fft_then_operate`, { method: 'POST', body: form });
-      if (!res.ok) throw new Error(`fft_then_operate failed: ${res.status}`);
-      this.loadingProgress = 80;   // network done, parsing remains
+// ─── FREQUENCY PIPELINE ───────────────────────────────────────
 
-const parts = await this.parseMultipart(res);
-this.loadingProgress = 100;
+private async applyOnFrequency(): Promise<void> {
+  this.loading = true;
+  this.resultReady = false;
+  try {
+    // No image sent — backend uses the cached FFT of the long-lived instance.
+    const form = this.buildActionForm();
+    const res  = await fetch(`${BASE}/fft_then_operate`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`fft_then_operate failed: ${res.status}`);
+    this.loadingProgress = 80;
 
-      if (parts['spatial_magnitude']) {
-        this.resultIsComplex   = true;
-        this.spatialResultMode = 'magnitude';
-        this.spatialResultBlobs = {
-          magnitude: parts['spatial_magnitude'],
-          phase:     parts['spatial_phase'],
-          real:      parts['spatial_real'],
-          imaginary: parts['spatial_imaginary'],
-        };
-        this.resultSrc = parts['spatial_magnitude'];
-      } else {
-        this.resultIsComplex   = false;
-        this.spatialResultMode = 'image';
-        this.spatialResultBlobs = { image: parts['spatial'] };
-        this.resultSrc = parts['spatial'];
-      }
-      this.ftResultBlobs = {
-        magnitude: parts['magnitude'],
-        phase:     parts['phase'],
-        real:      parts['real'],
-        imaginary: parts['imaginary'],
-        unshifted_magnitude: parts['unshifted_magnitude'],
-        unshifted_phase:     parts['unshifted_phase'],
-        unshifted_real:      parts['unshifted_real'],
-        unshifted_imaginary: parts['unshifted_imaginary'],
+    const parts = await this.parseMultipart(res);
+    this.loadingProgress = 100;
+
+    if (parts['spatial_magnitude']) {
+      this.resultIsComplex   = true;
+      this.spatialResultMode = 'magnitude';
+      this.spatialResultBlobs = {
+        magnitude: parts['spatial_magnitude'],
+        phase:     parts['spatial_phase'],
+        real:      parts['spatial_real'],
+        imaginary: parts['spatial_imaginary'],
       };
-      this.ftResultSrc = this.ftResultBlobs[this.ftResultMode];
-
-      this.resultReady = true;
-      this.cdr.detectChanges();
-    } catch (err) {
-      console.error('applyOnFrequency error:', err);
-    } finally {
-      this.loading = false;
-      this.cdr.detectChanges();
+      this.resultSrc = parts['spatial_magnitude'];
+    } else {
+      this.resultIsComplex    = false;
+      this.spatialResultMode  = 'image';
+      this.spatialResultBlobs = { image: parts['spatial'] };
+      this.resultSrc          = parts['spatial'];
     }
-  }
 
-  // ─── SPATIAL OPERATION DISPATCHER ────────────────────────────
-  private async callSpatialOperation(file: File): Promise<string> {
-    switch (this.selectedAction) {
-      case 'shift':         return this.opShift(file);
-      case 'stretch':       return this.opStretch(file);
-      case 'mirror':        return this.opMirror(file);
-      case 'rotate':        return this.opRotate(file);
-      case 'even':          return this.opEvenOdd(file, 'even');
-      case 'odd':           return this.opEvenOdd(file, 'odd');
-      case 'complex_exp':   return this.opComplexExp(file);
-      case 'window':        return this.opWindow(file);
-      case 'differentiate': return this.opDiff(file);
-      case 'integrate':     return this.opIntegrate(file);
-      case 'ft_repeat':     return this.opFtRepeat(file);
-      default: throw new Error(`Unknown action: ${this.selectedAction}`);
-    }
+    this.ftResultBlobs = {
+      magnitude:           parts['magnitude'],
+      phase:               parts['phase'],
+      real:                parts['real'],
+      imaginary:           parts['imaginary'],
+      unshifted_magnitude: parts['unshifted_magnitude'],
+      unshifted_phase:     parts['unshifted_phase'],
+      unshifted_real:      parts['unshifted_real'],
+      unshifted_imaginary: parts['unshifted_imaginary'],
+    };
+    this.ftResultSrc = this.ftResultBlobs[this.ftKey(this.ftResultMode, this.ftResultShifted)];
+
+    this.resultReady = true;
+    this.cdr.detectChanges();
+  } catch (err) {
+    console.error('applyOnFrequency error:', err);
+  } finally {
+    this.loading = false;
+    this.cdr.detectChanges();
   }
+}
+
 
   // ─── INDIVIDUAL SPATIAL OPERATION HANDLERS ───────────────────
 
@@ -682,36 +710,6 @@ private async callFftOnBlobUrl(
     const form = new FormData();
     for (const [k, v] of Object.entries(fields)) form.append(k, String(v));
     form.append('image', file);
-    return form;
-  }
-
-  private buildActionForm(file: File): FormData {
-    const form = new FormData();
-    form.append('action',         this.selectedAction);
-    form.append('shift_x',        String(this.params.shiftX));
-    form.append('shift_y',        String(this.params.shiftY));
-    form.append('cyclic',         String(this.params.cyclicShift));
-    form.append('flip',           String(this.params.flipShift));
-    form.append('stretch_x',      String(this.params.scaleX));
-    form.append('stretch_y',      String(this.params.scaleY));
-    form.append('angle',          String(this.params.angle));
-    form.append('mirror_axis',    this.params.mirrorAxis);
-    form.append('duplicate_mode', String(this.params.duplicateMode));
-    form.append('amplitude',      '1');
-    form.append('freq_u',         String(this.params.freqU));
-    form.append('freq_v',         String(this.params.freqV));
-    form.append('window_type',    this.params.windowType);
-    form.append('window_width',   String(this.params.windowW));
-    form.append('window_height',  String(this.params.windowH));
-    form.append('center_x',       String(Math.round(this.imageNaturalW / 2 + this.params.windowCenterX)));
-    form.append('center_y',       String(Math.round(this.imageNaturalH / 2 + this.params.windowCenterY)));
-    form.append('sigma_x',        String(this.params.sigma));
-    form.append('sigma_y',        String(this.params.sigma));
-    form.append('symmetry_type',  this.selectedAction === 'even' ? 'even' : 'odd');
-    form.append('axis',           this.params.diffAxis);
-    form.append('scenario_type',  this.params.ftScenarioType);
-    form.append('n', String(1 + this.params.chainFT));
-    form.append('image',          file);
     return form;
   }
 
